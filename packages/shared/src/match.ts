@@ -1,0 +1,880 @@
+import { DT, DEFAULT_RULES, type RulesConfig } from './config';
+import {
+  hitboxRect, hitstopFrames, hitstunFrames, hurtboxRect, knockbackSpeed, launchVector,
+} from './combat';
+import {
+  FIGHTERS, hitboxWindow, moveTotalFrames,
+  type FighterDef, type FighterId, type HitboxDef, type MoveDef, type MoveSlot,
+} from './fighters';
+import { approach, clamp, lerp, rectsOverlap } from './geometry';
+import { emptyInput, type InputFrame } from './input';
+import { nextRandom, randomInt } from './rng';
+import { SKYFALL_ARENA, type Platform, type StageDef } from './stage';
+
+export type FighterAction =
+  | 'idle' | 'run' | 'air' | 'attack' | 'hitstun' | 'dodge' | 'landing' | 'dead' | 'respawning';
+
+export type BufferedAction = 'light' | 'heavy' | 'special' | 'dodge';
+
+export interface FighterMatchStats {
+  kos: number;
+  falls: number;
+  damageDealt: number;
+  damageTaken: number;
+}
+
+export interface FighterState {
+  id: number;
+  fighter: FighterId;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  /** Knockback velocity, tracked separately so it can decay independently of gravity. */
+  kbx: number;
+  kby: number;
+  facing: 1 | -1;
+  grounded: boolean;
+  jumpsUsed: number;
+  coyote: number;
+  jumpBuffer: number;
+  /** True while the jump button is still held after a jump (enables short hops). */
+  jumpHeld: boolean;
+  dropThrough: number;
+  fastFalling: boolean;
+  action: FighterAction;
+  /** Frames into the current attack/dodge, or remaining landing lag. */
+  actionFrame: number;
+  move: MoveSlot | null;
+  hitVictims: string[];
+  judgeValue: number;
+  charge: number;
+  misfire: boolean;
+  rocketLaunched: boolean;
+  teleport: { dx: number; dy: number } | null;
+  damage: number;
+  stocks: number;
+  eliminated: boolean;
+  eliminatedAt: number;
+  hitstun: number;
+  hitstop: number;
+  invuln: number;
+  dodgeCooldown: number;
+  cooldowns: Record<MoveSlot, number>;
+  airUsed: MoveSlot[];
+  airBoostUsed: boolean;
+  buffer: { action: BufferedAction; frames: number } | null;
+  respawnTimer: number;
+  lastHitBy: number | null;
+  prevInput: InputFrame;
+  stats: FighterMatchStats;
+}
+
+export type GameEvent =
+  | { type: 'countdown'; value: number }
+  | { type: 'jump'; id: number; double: boolean; x: number; y: number }
+  | { type: 'land'; id: number; x: number; y: number }
+  | { type: 'attack'; id: number; slot: MoveSlot; moveId: string }
+  | { type: 'judge'; id: number; value: number }
+  | { type: 'rocket'; id: number; misfire: boolean; charge: number }
+  | { type: 'vanish'; id: number; fromX: number; fromY: number }
+  | { type: 'hit'; attacker: number; victim: number; damage: number; x: number; y: number; launchSpeed: number }
+  | { type: 'dodge'; id: number }
+  | { type: 'ko'; id: number; x: number; y: number; by: number | null }
+  | { type: 'respawn'; id: number }
+  | { type: 'eliminated'; id: number }
+  | { type: 'matchEnd'; winner: number | null; reason: 'stocks' | 'time' };
+
+export type MatchPhase = 'countdown' | 'playing' | 'ended';
+
+export interface MatchState {
+  frame: number;
+  phase: MatchPhase;
+  countdown: number;
+  timeLeft: number;
+  rngState: number;
+  rules: RulesConfig;
+  stage: StageDef;
+  fighters: FighterState[];
+  winner: number | null;
+  endReason: 'stocks' | 'time' | null;
+  events: GameEvent[];
+}
+
+export interface PlayerSetup {
+  fighter: FighterId;
+}
+
+export interface MatchOptions {
+  rules?: RulesConfig;
+  stage?: StageDef;
+  seed?: number;
+}
+
+export function createFighter(id: number, fighter: FighterId, stage: StageDef, stocks: number): FighterState {
+  const spawn = stage.spawns[id % stage.spawns.length];
+  return {
+    id,
+    fighter,
+    x: spawn.x,
+    y: spawn.y,
+    vx: 0,
+    vy: 0,
+    kbx: 0,
+    kby: 0,
+    facing: spawn.x <= 0 ? 1 : -1,
+    grounded: true,
+    jumpsUsed: 0,
+    coyote: 0,
+    jumpBuffer: 0,
+    jumpHeld: false,
+    dropThrough: 0,
+    fastFalling: false,
+    action: 'idle',
+    actionFrame: 0,
+    move: null,
+    hitVictims: [],
+    judgeValue: 0,
+    charge: 0,
+    misfire: false,
+    rocketLaunched: false,
+    teleport: null,
+    damage: 0,
+    stocks,
+    eliminated: false,
+    eliminatedAt: -1,
+    hitstun: 0,
+    hitstop: 0,
+    invuln: 0,
+    dodgeCooldown: 0,
+    cooldowns: { light: 0, heavy: 0, special: 0, aerial: 0 },
+    airUsed: [],
+    airBoostUsed: false,
+    buffer: null,
+    respawnTimer: 0,
+    lastHitBy: null,
+    prevInput: emptyInput(),
+    stats: { kos: 0, falls: 0, damageDealt: 0, damageTaken: 0 },
+  };
+}
+
+export function createMatch(players: PlayerSetup[], options: MatchOptions = {}): MatchState {
+  const rules = options.rules ?? DEFAULT_RULES;
+  const stage = options.stage ?? SKYFALL_ARENA;
+  return {
+    frame: 0,
+    phase: rules.countdownFrames > 0 ? 'countdown' : 'playing',
+    countdown: rules.countdownFrames,
+    timeLeft: rules.matchFrames,
+    rngState: (options.seed ?? 0x1234abcd) >>> 0,
+    rules,
+    stage,
+    fighters: players.map((p, i) => createFighter(i, p.fighter, stage, rules.stocks)),
+    winner: null,
+    endReason: null,
+    events: [],
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Queries
+// ---------------------------------------------------------------------------
+
+export function fighterDef(f: FighterState): FighterDef {
+  return FIGHTERS[f.fighter];
+}
+
+export function currentMove(f: FighterState): MoveDef | null {
+  return f.move ? FIGHTERS[f.fighter].moves[f.move] : null;
+}
+
+export function isActionable(f: FighterState): boolean {
+  return f.action === 'idle' || f.action === 'run' || f.action === 'air';
+}
+
+export function isIntangible(f: FighterState, rules: RulesConfig): boolean {
+  if (f.action === 'dead' || f.action === 'respawning' || f.eliminated) return true;
+  if (f.invuln > 0) return true;
+  if (f.action === 'dodge' && f.actionFrame < rules.dodge.invulnFrames) return true;
+  const move = currentMove(f);
+  if (f.action === 'attack' && move?.intangible) {
+    const [s, e] = move.intangible;
+    if (f.actionFrame >= s && f.actionFrame < e) return true;
+  }
+  return false;
+}
+
+/** Hitboxes of `f` that are active on its current frame. */
+export function activeHitboxes(f: FighterState): HitboxDef[] {
+  if (f.action !== 'attack') return [];
+  const move = currentMove(f);
+  if (!move) return [];
+  if (move.behavior?.type === 'rocket' && !f.rocketLaunched) return [];
+  return move.hitboxes.filter((hb) => {
+    const [s, e] = hitboxWindow(move, hb);
+    return f.actionFrame >= s && f.actionFrame < e;
+  });
+}
+
+/** Ranks fighters: survivors first, then by stocks, elimination time, and damage. */
+export function standings(m: MatchState): FighterState[] {
+  return [...m.fighters].sort((a, b) => {
+    if (a.eliminated !== b.eliminated) return a.eliminated ? 1 : -1;
+    if (a.stocks !== b.stocks) return b.stocks - a.stocks;
+    if (a.eliminatedAt !== b.eliminatedAt) return b.eliminatedAt - a.eliminatedAt;
+    return a.damage - b.damage;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Step
+// ---------------------------------------------------------------------------
+
+/** Advances the match by one fixed 60 Hz frame. Returns the events produced this frame. */
+export function stepMatch(m: MatchState, inputs: InputFrame[]): GameEvent[] {
+  m.events = [];
+  if (m.phase === 'ended') return m.events;
+
+  if (m.phase === 'countdown') {
+    if (m.countdown % 60 === 0) m.events.push({ type: 'countdown', value: m.countdown / 60 });
+    m.countdown--;
+    for (let i = 0; i < m.fighters.length; i++) m.fighters[i].prevInput = { ...(inputs[i] ?? emptyInput()) };
+    if (m.countdown <= 0) {
+      m.phase = 'playing';
+      m.events.push({ type: 'countdown', value: 0 });
+    }
+    return m.events;
+  }
+
+  m.frame++;
+  for (let i = 0; i < m.fighters.length; i++) {
+    updateFighter(m, m.fighters[i], inputs[i] ?? emptyInput());
+  }
+  resolveHits(m);
+  for (const f of m.fighters) checkBlastZone(m, f);
+
+  m.timeLeft = Math.max(0, m.timeLeft - 1);
+  checkMatchEnd(m);
+  return m.events;
+}
+
+function updateBuffers(m: MatchState, f: FighterState, input: InputFrame): void {
+  const prev = f.prevInput;
+  const pressed = (k: keyof InputFrame) => input[k] && !prev[k];
+  if (pressed('jump')) f.jumpBuffer = m.rules.jumpBufferFrames;
+  else if (f.jumpBuffer > 0) f.jumpBuffer--;
+
+  const frames = m.rules.attackBufferFrames;
+  if (pressed('special')) f.buffer = { action: 'special', frames };
+  else if (pressed('heavy')) f.buffer = { action: 'heavy', frames };
+  else if (pressed('light')) f.buffer = { action: 'light', frames };
+  else if (pressed('dodge')) f.buffer = { action: 'dodge', frames };
+  else if (f.buffer && --f.buffer.frames <= 0) f.buffer = null;
+}
+
+function updateFighter(m: MatchState, f: FighterState, input: InputFrame): void {
+  if (f.eliminated) {
+    f.prevInput = { ...input };
+    return;
+  }
+  updateBuffers(m, f, input);
+
+  if (f.hitstop > 0) {
+    f.hitstop--;
+    f.prevInput = { ...input };
+    return;
+  }
+
+  if (f.invuln > 0) f.invuln--;
+  if (f.dodgeCooldown > 0) f.dodgeCooldown--;
+  if (f.dropThrough > 0) f.dropThrough--;
+  if (!f.grounded && f.coyote > 0) f.coyote--;
+  for (const k of Object.keys(f.cooldowns) as MoveSlot[]) if (f.cooldowns[k] > 0) f.cooldowns[k]--;
+
+  if (f.action === 'dead') {
+    if (--f.respawnTimer <= 0) respawn(m, f);
+    f.prevInput = { ...input };
+    return;
+  }
+
+  const dir = (input.right ? 1 : 0) - (input.left ? 1 : 0);
+
+  if (f.action === 'respawning') {
+    f.respawnTimer--;
+    const wantsToLeave = dir !== 0 || input.down || f.jumpBuffer > 0 || f.buffer !== null;
+    if (f.respawnTimer <= 0 || wantsToLeave) {
+      f.action = 'air';
+      f.invuln = m.rules.respawnInvulnFrames;
+      f.jumpsUsed = 1;
+    } else {
+      f.prevInput = { ...input };
+      return;
+    }
+  }
+
+  switch (f.action) {
+    case 'hitstun':
+      if (--f.hitstun <= 0) f.action = f.grounded ? 'idle' : 'air';
+      break;
+    case 'landing':
+      if (--f.actionFrame <= 0) f.action = 'idle';
+      break;
+    case 'dodge':
+      if (++f.actionFrame >= m.rules.dodge.totalFrames) f.action = f.grounded ? 'idle' : 'air';
+      break;
+    case 'attack':
+      updateAttack(m, f, input, dir);
+      break;
+    default:
+      break;
+  }
+
+  if (isActionable(f)) tryActions(m, f, input, dir);
+  physics(m, f, input, dir);
+  f.prevInput = { ...input };
+}
+
+function tryActions(m: MatchState, f: FighterState, input: InputFrame, dir: number): void {
+  const def = fighterDef(f);
+  const s = def.stats;
+
+  if (f.buffer?.action === 'dodge') {
+    if (f.dodgeCooldown <= 0) {
+      startDodge(m, f, input, dir);
+      f.buffer = null;
+      return;
+    }
+  } else if (f.buffer) {
+    let slot: MoveSlot = f.buffer.action as MoveSlot;
+    if (!f.grounded && slot === 'light') slot = 'aerial';
+    const move = def.moves[slot];
+    const blockedInAir = !f.grounded && move.oncePerAirtime && f.airUsed.includes(slot);
+    if (f.cooldowns[slot] <= 0 && !blockedInAir) {
+      startMove(m, f, slot, dir);
+      f.buffer = null;
+      return;
+    }
+  }
+
+  // Drop through a one-way platform.
+  if (f.grounded && input.down && !f.prevInput.down && standingPlatform(m, f)?.oneWay) {
+    f.dropThrough = m.rules.dropThroughFrames;
+    f.grounded = false;
+    f.y += 2;
+    f.vy = 120;
+    f.action = 'air';
+    return;
+  }
+
+  if (f.jumpBuffer > 0) {
+    if ((f.grounded || f.coyote > 0) && f.jumpsUsed === 0) {
+      f.vy = -s.jumpVelocity;
+      f.grounded = false;
+      f.coyote = 0;
+      f.jumpsUsed = 1;
+      f.jumpBuffer = 0;
+      f.jumpHeld = true;
+      f.fastFalling = false;
+      f.action = 'air';
+      m.events.push({ type: 'jump', id: f.id, double: false, x: f.x, y: f.y });
+    } else if (!f.grounded && Math.max(f.jumpsUsed, 1) < s.maxJumps) {
+      f.jumpsUsed = Math.max(f.jumpsUsed, 1) + 1;
+      f.vy = -s.doubleJumpVelocity;
+      f.kby = Math.min(f.kby, 0);
+      if (dir !== 0) {
+        f.vx = dir * s.airSpeed;
+        f.facing = dir as 1 | -1;
+      }
+      f.jumpBuffer = 0;
+      f.jumpHeld = true;
+      f.fastFalling = false;
+      m.events.push({ type: 'jump', id: f.id, double: true, x: f.x, y: f.y });
+    }
+  }
+}
+
+function startDodge(m: MatchState, f: FighterState, input: InputFrame, dir: number): void {
+  const d = m.rules.dodge;
+  f.action = 'dodge';
+  f.actionFrame = 0;
+  f.dodgeCooldown = d.cooldownFrames;
+  f.fastFalling = false;
+  if (f.grounded) {
+    f.vx = dir * d.rollSpeed;
+  } else {
+    const dy = input.up || input.jump ? -1 : input.down ? 1 : 0;
+    const len = Math.hypot(dir, dy) || 1;
+    if (dir !== 0 || dy !== 0) {
+      f.vx = (dir / len) * d.airDodgeSpeed;
+      f.vy = (dy / len) * d.airDodgeSpeed;
+    } else {
+      f.vy *= 0.3;
+    }
+  }
+  m.events.push({ type: 'dodge', id: f.id });
+}
+
+function startMove(m: MatchState, f: FighterState, slot: MoveSlot, dir: number): void {
+  const move = fighterDef(f).moves[slot];
+  f.action = 'attack';
+  f.move = slot;
+  f.actionFrame = 0;
+  f.hitVictims = [];
+  f.charge = 0;
+  f.misfire = false;
+  f.rocketLaunched = false;
+  f.judgeValue = 0;
+  f.teleport = null;
+  if (dir !== 0) f.facing = dir as 1 | -1;
+  if (!f.grounded && move.oncePerAirtime) f.airUsed.push(slot);
+  m.events.push({ type: 'attack', id: f.id, slot, moveId: move.id });
+
+  if (move.behavior?.type === 'judge') {
+    const outcomes = move.behavior.outcomes;
+    const outcome = outcomes[randomInt(m, 0, outcomes.length - 1)];
+    f.judgeValue = outcome.value;
+    if (outcome.selfDamage) {
+      f.damage = clamp(f.damage + outcome.selfDamage, 0, m.rules.combat.maxDamage);
+    }
+    m.events.push({ type: 'judge', id: f.id, value: outcome.value });
+  }
+}
+
+function endMove(f: FighterState, move: MoveDef): void {
+  if (f.move) f.cooldowns[f.move] = move.cooldown;
+  f.move = null;
+  f.action = f.grounded ? 'idle' : 'air';
+  f.teleport = null;
+}
+
+function updateAttack(m: MatchState, f: FighterState, input: InputFrame, dir: number): void {
+  const move = currentMove(f);
+  if (!move) {
+    f.action = f.grounded ? 'idle' : 'air';
+    return;
+  }
+  const b = move.behavior;
+
+  // Luigi's rocket: hold special on the last startup frame to charge.
+  if (
+    b?.type === 'rocket' && !f.rocketLaunched && f.actionFrame === move.startup - 1 &&
+    input.special && f.charge < b.maxChargeFrames
+  ) {
+    f.charge++;
+    return;
+  }
+
+  f.actionFrame++;
+  const fr = f.actionFrame;
+
+  if (b?.type === 'rocket' && fr === move.startup) {
+    const ratio = f.charge / b.maxChargeFrames;
+    f.misfire = nextRandom(m) < b.misfireChance;
+    const speed = f.misfire ? b.misfireSpeed : lerp(b.minSpeed, b.maxSpeed, ratio);
+    f.vx = f.facing * speed;
+    f.vy = 0;
+    f.rocketLaunched = true;
+    m.events.push({ type: 'rocket', id: f.id, misfire: f.misfire, charge: ratio });
+  }
+
+  if (b?.type === 'vanish' && fr === move.startup) {
+    let dx = dir;
+    const dy = input.up || input.jump ? -1 : input.down ? 1 : 0;
+    if (dx === 0 && dy === 0) dx = f.facing;
+    const len = Math.hypot(dx, dy);
+    f.teleport = { dx: (dx / len) * b.distance, dy: (dy / len) * b.distance };
+    if (dx !== 0) f.facing = (dx > 0 ? 1 : -1);
+    m.events.push({ type: 'vanish', id: f.id, fromX: f.x, fromY: f.y });
+    f.vx = 0;
+    f.vy = 0;
+    f.kbx = 0;
+    f.kby = 0;
+    if (f.teleport.dy < 0) f.grounded = false;
+  }
+
+  const imp = move.impulse;
+  if (imp && fr === imp.frame) {
+    const allowed = (!imp.airOnly || !f.grounded) && !(imp.oncePerAirtime && f.airBoostUsed);
+    if (allowed) {
+      if (imp.vx !== undefined) f.vx = imp.vx * f.facing;
+      if (imp.vy !== undefined) f.vy = imp.vy;
+      if (imp.vy !== undefined && imp.vy < 0) f.grounded = false;
+      if (imp.oncePerAirtime) f.airBoostUsed = true;
+    }
+  }
+
+  if (fr >= moveTotalFrames(move)) endMove(f, move);
+}
+
+function rocketFlying(f: FighterState, move: MoveDef | null): boolean {
+  return (
+    !!move && move.behavior?.type === 'rocket' && f.rocketLaunched &&
+    f.actionFrame >= move.startup && f.actionFrame < move.startup + move.active
+  );
+}
+
+function physics(m: MatchState, f: FighterState, input: InputFrame, dir: number): void {
+  const s = fighterDef(f).stats;
+  const move = f.action === 'attack' ? currentMove(f) : null;
+  const flying = rocketFlying(f, move);
+  const vanishing = move?.behavior?.type === 'vanish' && f.actionFrame < move.startup;
+
+  // Fast fall: tap down while airborne and not rising quickly.
+  if (!f.grounded && input.down && !f.prevInput.down && f.vy > -150 &&
+      (isActionable(f) || f.action === 'attack')) {
+    f.fastFalling = true;
+    f.vy = Math.max(f.vy, s.fastFallSpeed);
+  }
+
+  // Horizontal control
+  if (f.action === 'hitstun') {
+    if (f.grounded) f.vx = approach(f.vx, 0, s.groundFriction * DT);
+    else f.vx = approach(f.vx, dir * s.airSpeed * 0.5, s.airAccel * 0.25 * DT);
+  } else if (flying) {
+    // Rocket keeps its launch speed.
+  } else if (f.action === 'dodge') {
+    const rolling = f.actionFrame < m.rules.dodge.invulnFrames;
+    if (f.grounded) f.vx = approach(f.vx, 0, (rolling ? 0.3 : 2) * s.groundFriction * DT);
+    else f.vx = approach(f.vx, 0, s.airFriction * 2 * DT);
+  } else if (f.action === 'attack' || f.action === 'landing') {
+    if (f.grounded) f.vx = approach(f.vx, 0, s.groundFriction * DT);
+    else if (dir !== 0) f.vx = approach(f.vx, dir * s.airSpeed, s.airAccel * DT);
+    else f.vx = approach(f.vx, 0, s.airFriction * DT);
+  } else if (isActionable(f)) {
+    if (f.grounded) {
+      if (dir !== 0) {
+        const turning = f.vx * dir < 0;
+        const accel = turning ? s.groundAccel + s.groundFriction : s.groundAccel;
+        f.vx = approach(f.vx, dir * s.runSpeed, accel * DT);
+        f.facing = dir as 1 | -1;
+        f.action = 'run';
+      } else {
+        f.vx = approach(f.vx, 0, s.groundFriction * DT);
+        f.action = 'idle';
+      }
+    } else {
+      if (dir !== 0) f.vx = approach(f.vx, dir * s.airSpeed, s.airAccel * DT);
+      else f.vx = approach(f.vx, 0, s.airFriction * DT);
+      f.action = 'air';
+    }
+  }
+
+  // Vertical
+  if (!f.grounded) {
+    if (flying) {
+      f.vy = 0;
+    } else if (vanishing) {
+      f.vy *= 0.8;
+    } else {
+      const cap = f.fastFalling ? s.fastFallSpeed : s.maxFallSpeed;
+      // Never slow a fighter that is already faster than the cap (e.g. Key Drop impulse).
+      if (f.vy < cap) f.vy = Math.min(f.vy + s.gravity * DT, cap);
+    }
+    // Variable jump height: releasing jump early cuts the rise.
+    if (f.jumpHeld && !input.jump && f.vy < 0 && f.action !== 'hitstun') {
+      f.vy *= 0.5;
+      f.jumpHeld = false;
+    }
+    if (f.vy >= 0) f.jumpHeld = false;
+  }
+
+  if (f.grounded && f.kby < 0) f.grounded = false;
+
+  const prevX = f.x;
+  const prevY = f.y;
+  f.x += (f.vx + f.kbx) * DT + (f.teleport?.dx ?? 0);
+  f.y += (f.vy + f.kby) * DT + (f.teleport?.dy ?? 0);
+  f.teleport = null;
+
+  // Knockback decays linearly along its direction.
+  const kbMag = Math.hypot(f.kbx, f.kby);
+  if (kbMag > 0) {
+    const next = Math.max(0, kbMag - m.rules.combat.knockbackDecay * DT);
+    f.kbx *= next / kbMag;
+    f.kby *= next / kbMag;
+  }
+
+  const wasGrounded = f.grounded;
+  collide(m, f, prevX, prevY);
+
+  if (wasGrounded && f.grounded && !standingPlatform(m, f)) {
+    f.grounded = false;
+    if (isActionable(f)) f.coyote = m.rules.coyoteFrames;
+  }
+}
+
+function withinPlatformX(p: Platform, x: number): boolean {
+  return x >= p.x1 - 6 && x <= p.x2 + 6;
+}
+
+export function standingPlatform(m: MatchState, f: FighterState): Platform | null {
+  for (const p of m.stage.platforms) {
+    if (p.oneWay && f.dropThrough > 0) continue;
+    if (Math.abs(f.y - p.y) < 0.5 && withinPlatformX(p, f.x)) return p;
+  }
+  return null;
+}
+
+function collide(m: MatchState, f: FighterState, prevX: number, prevY: number): void {
+  const s = fighterDef(f).stats;
+  const hw = s.width / 2;
+  const movingDown = f.vy + f.kby >= 0;
+
+  for (const p of m.stage.platforms) {
+    const top = p.y;
+    if (p.oneWay) {
+      if (f.dropThrough > 0 || f.grounded) continue;
+      if (movingDown && prevY <= top + 0.01 && f.y >= top && withinPlatformX(p, f.x)) land(m, f, top);
+      continue;
+    }
+
+    const bottom = p.y + p.height;
+    const overlapX = f.x + hw > p.x1 && f.x - hw < p.x2;
+    if (!f.grounded && movingDown && prevY <= top + 0.01 && f.y >= top && withinPlatformX(p, f.x)) {
+      land(m, f, top);
+    } else if (prevY - s.height >= bottom - 0.01 && f.y - s.height < bottom && overlapX) {
+      // Bonk the underside.
+      f.y = bottom + s.height;
+      if (f.vy < 0) f.vy = 0;
+      if (f.kby < 0) f.kby = -f.kby * 0.4;
+    } else if (f.y > top + 0.01 && f.y - s.height < bottom && overlapX) {
+      const center = (p.x1 + p.x2) / 2;
+      const towardStage = (f.x < center && f.vx + f.kbx > 0) || (f.x > center && f.vx + f.kbx < 0);
+      const rising = f.vy + f.kby < 0;
+      if (f.y - top <= m.rules.ledgeSnap && f.action !== 'hitstun' && (towardStage || rising)) {
+        // Close enough to the lip: pop up onto the platform (simple ledge recovery).
+        f.x = clamp(f.x, p.x1 + 2, p.x2 - 2);
+        f.vy = Math.min(f.vy, 0);
+        f.kby = 0;
+        land(m, f, top);
+      } else {
+        f.x = prevX <= center ? p.x1 - hw : p.x2 + hw;
+        if (f.x < center ? f.vx > 0 : f.vx < 0) f.vx = 0;
+        f.kbx = -f.kbx * 0.3;
+      }
+    }
+  }
+}
+
+function land(m: MatchState, f: FighterState, top: number): void {
+  f.y = top;
+  const s = fighterDef(f).stats;
+  if (f.kby > m.rules.combat.groundBounceSpeed) {
+    // Spiked into the ground hard enough to bounce.
+    f.kby = -f.kby * 0.6;
+    f.vy = 0;
+    return;
+  }
+  const wasAirborne = !f.grounded;
+  f.grounded = true;
+  f.vy = 0;
+  f.kby = 0;
+  f.jumpsUsed = 0;
+  f.coyote = 0;
+  f.fastFalling = false;
+  f.jumpHeld = false;
+  f.airUsed = [];
+  f.airBoostUsed = false;
+  if (wasAirborne) {
+    m.events.push({ type: 'land', id: f.id, x: f.x, y: f.y });
+    if (f.action === 'air') f.action = 'idle';
+    const move = currentMove(f);
+    if (f.action === 'attack' && move?.landingLag !== undefined) {
+      if (f.move) f.cooldowns[f.move] = move.cooldown;
+      f.move = null;
+      f.action = 'landing';
+      f.actionFrame = move.landingLag;
+    }
+  }
+  // Clamp horizontal speed on landing so air speed doesn't carry into a run cap violation.
+  if (Math.abs(f.vx) > s.runSpeed * 1.5 && f.action !== 'attack' && f.action !== 'hitstun') {
+    f.vx = Math.sign(f.vx) * s.runSpeed * 1.5;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Combat
+// ---------------------------------------------------------------------------
+
+interface PendingHit {
+  attacker: FighterState;
+  victim: FighterState;
+  hitbox: HitboxDef;
+  x: number;
+  y: number;
+}
+
+function resolveHits(m: MatchState): void {
+  const pending: PendingHit[] = [];
+  for (const att of m.fighters) {
+    if (att.hitstop > 0 || att.action !== 'attack') continue;
+    const boxes = activeHitboxes(att);
+    if (boxes.length === 0) continue;
+    for (const hb of boxes) {
+      const rect = hitboxRect(att, hb);
+      for (const vic of m.fighters) {
+        if (vic === att || isIntangible(vic, m.rules)) continue;
+        const key = `${hb.group ?? 0}:${vic.id}`;
+        if (att.hitVictims.includes(key)) continue;
+        const hurt = hurtboxRect(vic, fighterDef(vic).stats);
+        if (!rectsOverlap(rect, hurt)) continue;
+        att.hitVictims.push(key);
+        const x = (Math.max(rect.x, hurt.x) + Math.min(rect.x + rect.w, hurt.x + hurt.w)) / 2;
+        const y = (Math.max(rect.y, hurt.y) + Math.min(rect.y + rect.h, hurt.y + hurt.h)) / 2;
+        pending.push({ attacker: att, victim: vic, hitbox: hb, x, y });
+      }
+    }
+  }
+  for (const h of pending) applyHit(m, h);
+}
+
+/** Resolves the effective damage/knockback of a hitbox, accounting for move behaviors. */
+export function resolveHitboxValues(f: FighterState, move: MoveDef, hb: HitboxDef) {
+  let damage = hb.damage;
+  let baseKnockback = hb.baseKnockback;
+  let knockbackGrowth = hb.knockbackGrowth;
+  let angle = hb.angle;
+  let hitstunMultiplier = hb.hitstunMultiplier ?? 1;
+  const b = move.behavior;
+  if (b?.type === 'judge') {
+    const o = b.outcomes.find((x) => x.value === f.judgeValue) ?? b.outcomes[0];
+    damage = o.damage;
+    baseKnockback = o.baseKnockback;
+    knockbackGrowth = o.knockbackGrowth;
+    angle = o.angle;
+    hitstunMultiplier = o.hitstunMultiplier ?? 1;
+  } else if (b?.type === 'rocket') {
+    const ratio = f.charge / b.maxChargeFrames;
+    damage = f.misfire ? b.misfireDamage : Math.round(lerp(b.minDamage, b.maxDamage, ratio));
+    baseKnockback = f.misfire ? b.misfireBaseKnockback : lerp(b.minBaseKnockback, b.maxBaseKnockback, ratio);
+  }
+  return { damage, baseKnockback, knockbackGrowth, angle, hitstunMultiplier };
+}
+
+function applyHit(m: MatchState, h: PendingHit): void {
+  const { attacker: att, victim: vic, hitbox: hb } = h;
+  const move = currentMove(att);
+  if (!move) return;
+  const rules = m.rules;
+  const v = resolveHitboxValues(att, move, hb);
+
+  vic.damage = Math.min(rules.combat.maxDamage, vic.damage + v.damage);
+  const speed = knockbackSpeed(vic.damage, v.damage, v.baseKnockback, v.knockbackGrowth, fighterDef(vic).stats.weight);
+  let dir: 1 | -1 = att.facing;
+  if (hb.autoDirection && vic.x !== att.x) dir = vic.x > att.x ? 1 : -1;
+  const launch = launchVector(v.angle, dir, speed);
+  if (vic.grounded && launch.y > 0) launch.y = -launch.y * 0.8;
+
+  vic.kbx = launch.x;
+  vic.kby = launch.y;
+  vic.vx = 0;
+  vic.vy = 0;
+  if (launch.y < 0) vic.grounded = false;
+  vic.hitstun = hitstunFrames(speed, rules, v.hitstunMultiplier);
+  vic.action = 'hitstun';
+  vic.move = null;
+  vic.fastFalling = false;
+  vic.jumpHeld = false;
+  vic.facing = (-dir) as 1 | -1;
+  vic.jumpsUsed = Math.min(vic.jumpsUsed, 1);
+  vic.airUsed = [];
+  vic.airBoostUsed = false;
+  vic.buffer = null;
+  vic.lastHitBy = att.id;
+
+  const stop = hitstopFrames(v.damage, rules);
+  vic.hitstop = stop;
+  att.hitstop = Math.max(att.hitstop, stop);
+
+  att.stats.damageDealt += v.damage;
+  vic.stats.damageTaken += v.damage;
+
+  if (move.stopOnHit) {
+    att.vx = -att.facing * 250;
+    att.vy = -350;
+    att.grounded = false;
+    att.actionFrame = move.startup + move.active;
+  }
+
+  m.events.push({
+    type: 'hit', attacker: att.id, victim: vic.id, damage: v.damage, x: h.x, y: h.y, launchSpeed: speed,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Stocks, respawn, match end
+// ---------------------------------------------------------------------------
+
+function checkBlastZone(m: MatchState, f: FighterState): void {
+  if (f.action === 'dead' || f.eliminated || f.action === 'respawning') return;
+  const bz = m.stage.blastZone;
+  if (f.x >= bz.left && f.x <= bz.right && f.y >= bz.top && f.y <= bz.bottom) return;
+  koFighter(m, f);
+}
+
+export function koFighter(m: MatchState, f: FighterState): void {
+  const bz = m.stage.blastZone;
+  m.events.push({
+    type: 'ko',
+    id: f.id,
+    x: clamp(f.x, bz.left, bz.right),
+    y: clamp(f.y, bz.top, bz.bottom),
+    by: f.lastHitBy,
+  });
+  if (f.lastHitBy !== null && f.lastHitBy !== f.id) m.fighters[f.lastHitBy].stats.kos++;
+  f.stats.falls++;
+  f.stocks = Math.max(0, f.stocks - 1);
+  f.action = 'dead';
+  f.move = null;
+  f.vx = f.vy = f.kbx = f.kby = 0;
+  f.hitstun = 0;
+  f.hitstop = 0;
+  f.lastHitBy = null;
+  if (f.stocks <= 0) {
+    f.eliminated = true;
+    f.eliminatedAt = m.frame;
+    m.events.push({ type: 'eliminated', id: f.id });
+  } else {
+    f.respawnTimer = m.rules.respawnDelayFrames;
+  }
+}
+
+function respawn(m: MatchState, f: FighterState): void {
+  const point = m.stage.respawns[f.id % m.stage.respawns.length];
+  f.x = point.x;
+  f.y = point.y;
+  f.vx = f.vy = f.kbx = f.kby = 0;
+  f.damage = 0;
+  f.grounded = false;
+  f.jumpsUsed = 0;
+  f.fastFalling = false;
+  f.airUsed = [];
+  f.airBoostUsed = false;
+  f.buffer = null;
+  f.jumpBuffer = 0;
+  f.cooldowns = { light: 0, heavy: 0, special: 0, aerial: 0 };
+  f.action = 'respawning';
+  f.respawnTimer = m.rules.respawnHoverFrames;
+  f.facing = point.x <= 0 ? 1 : -1;
+  m.events.push({ type: 'respawn', id: f.id });
+}
+
+function checkMatchEnd(m: MatchState): void {
+  if (m.phase !== 'playing' || m.fighters.length < 2) return;
+  const alive = m.fighters.filter((f) => !f.eliminated);
+  if (alive.length <= 1) {
+    endMatch(m, alive[0]?.id ?? null, 'stocks');
+  } else if (m.timeLeft <= 0) {
+    const ranked = standings(m);
+    const [a, b] = ranked;
+    const tie = a.stocks === b.stocks && a.damage === b.damage && !a.eliminated && !b.eliminated;
+    endMatch(m, tie ? null : a.id, 'time');
+  }
+}
+
+function endMatch(m: MatchState, winner: number | null, reason: 'stocks' | 'time'): void {
+  m.phase = 'ended';
+  m.winner = winner;
+  m.endReason = reason;
+  m.events.push({ type: 'matchEnd', winner, reason });
+}

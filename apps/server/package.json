@@ -1,0 +1,16 @@
+{
+  "name": "@arena-rush/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "sim": "tsx src/headless-sim.ts"
+  },
+  "dependencies": {
+    "@arena-rush/shared": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.1",
+    "tsx": "^4.19.2"
+  }
+}

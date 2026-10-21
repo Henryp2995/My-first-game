@@ -258,6 +258,30 @@ class SoundManager {
     this.noise(0.35, 0.22, 'highpass', 4000, 9000, 0.05);
   }
 
+  // ── Ledges & shields ────────────────────────────────────────────────────
+
+  ledgeGrab(): void {
+    this.noise(0.05, 0.45, 'bandpass', 1800, 900, 0, 'combat', 2);
+    this.tone(320, 240, 0.06, 'triangle', 0.2);
+  }
+  ledgeClimb(): void {
+    this.noise(0.14, 0.3, 'bandpass', 900, 2200, 0, 'combat', 1.2);
+  }
+  shieldUp(): void {
+    if (this.gate('shieldUp', 80)) this.tone(520, 880, 0.08, 'sine', 0.14);
+  }
+  /** Glassy thunk; lower and duller as the shield weakens. */
+  shieldHit(healthRatio: number): void {
+    const r = Math.max(0, Math.min(1, healthRatio));
+    this.tone(700 + r * 700, 300 + r * 300, 0.12, 'triangle', 0.35);
+    this.noise(0.08, 0.4, 'highpass', 4000 + r * 3000, 2000, 0, 'combat');
+  }
+  shieldBreak(): void {
+    for (let i = 0; i < 6; i++) this.tone(2400 - i * 260, 900 - i * 90, 0.12, 'triangle', 0.22, i * 0.035);
+    this.noise(0.5, 0.8, 'highpass', 6000, 1500);
+    this.tone(160, 50, 0.5, 'sine', 0.55);
+  }
+
   // ── Attacks ─────────────────────────────────────────────────────────────
 
   /** Quick, bright swish. */

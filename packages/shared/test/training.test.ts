@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  ComboTracker, createMatch, DEFAULT_RULES, emptyInput, FIGHTER_ORDER, getStage, makeInput, resetPositions,
-  setFighterDamage, STAGE_ORDER, stepMatch, TRAINING_RULES, TrainingDummyController,
+  ComboTracker, createMatch, DEFAULT_RULES, emptyInput, FIGHTER_ORDER, getStage, hangOnNearestLedge, makeInput, resetPositions,
+  setFighterDamage, setFighterShield, STAGE_ORDER, stepMatch, TRAINING_RULES, TrainingDummyController,
   type DummyBehavior, type FighterId, type GameEvent, type InputFrame, type MatchState,
 } from '../src';
 
@@ -171,11 +171,55 @@ describe('other dummy behaviours', () => {
     expect(Math.abs(m.fighters[DUMMY].x - far.m.fighters[DUMMY].x)).toBeLessThan(30);
   });
 
-  it('Defend dodges an incoming attack and never attacks', () => {
+  it('Defend shields an incoming attack and never attacks', () => {
     const player = (i: number) => (i % 60 === 10 ? makeInput({ heavy: true }) : emptyInput());
-    const { ev } = eventsFor('defend', (mm) => besideDummy(mm, 50), player);
-    expect(ev.some((e) => e.type === 'dodge' && e.id === DUMMY)).toBe(true);
+    const { m, ev } = eventsFor('defend', (mm) => besideDummy(mm, 50), player);
+    expect(ev.some((e) => e.type === 'shield' && e.id === DUMMY && e.up)).toBe(true);
+    expect(ev.some((e) => e.type === 'shieldHit' && e.victim === DUMMY)).toBe(true);
     expect(ev.some((e) => e.type === 'attack' && e.id === DUMMY)).toBe(false);
+    expect(m.fighters[DUMMY].damage).toBeLessThan(15);
+  });
+
+  it('Hold Shield keeps its shield up and re-raises it after a break', () => {
+    const m = training();
+    const dummy = new TrainingDummyController(DUMMY, 'shield');
+    run(m, dummy, 30);
+    expect(m.fighters[DUMMY].action).toBe('shield');
+    m.fighters[DUMMY].shieldHp = 1;
+    const ev = run(m, dummy, 20);
+    expect(ev.some((e) => e.type === 'shieldBreak' && e.id === DUMMY)).toBe(true);
+    run(m, dummy, DEFAULT_RULES.shield.breakStunFrames + 20);
+    expect(m.fighters[DUMMY].action).toBe('shield');
+  });
+
+  it('Recover to Ledge gets back from offstage via the ledge, otherwise stands still', () => {
+    const m = training();
+    const dummy = new TrainingDummyController(DUMMY, 'recover');
+    const x0 = m.fighters[DUMMY].x;
+    const idle = run(m, dummy, 120);
+    expect(idle.some((e) => 'id' in e && e.id === DUMMY && ['attack', 'jump', 'dodge', 'shield'].includes(e.type))).toBe(false);
+    expect(m.fighters[DUMMY].x).toBeCloseTo(x0, 5);
+    const d = m.fighters[DUMMY];
+    d.x = m.stage.platforms[0].x2 + 80;
+    d.y = 60;
+    d.grounded = false;
+    d.action = 'air' as typeof d.action;
+    d.jumpsUsed = 1;
+    const ev = run(m, dummy, 300);
+    expect(ev.some((e) => e.type === 'ledgeGrab' && e.id === DUMMY) || ev.some((e) => e.type === 'land' && e.id === DUMMY)).toBe(true);
+    expect(d.grounded).toBe(true);
+    expect(d.eliminated || d.action === 'dead').toBe(false);
+  });
+
+  it('Hang helpers put a fighter on the nearest ledge, and shield health can be set', () => {
+    const m = training();
+    expect(hangOnNearestLedge(m, DUMMY)).toBe(true);
+    expect(m.fighters[DUMMY].action).toBe('ledge');
+    expect(m.fighters[DUMMY].invuln).toBe(DEFAULT_RULES.ledge.invulnFrames);
+    setFighterShield(m, 0, 25);
+    expect(m.fighters[0].shieldHp).toBe(25);
+    setFighterShield(m, 0, 500);
+    expect(m.fighters[0].shieldHp).toBe(DEFAULT_RULES.shield.maxHealth);
   });
 
   it('Normal CPU uses the regular CPU AI (approaches and attacks)', () => {

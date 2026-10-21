@@ -286,7 +286,7 @@ describe('projectile rules', () => {
     const ev: GameEvent[] = [];
     for (let i = 0; i < 30; i++) {
       // Victim dodges just as the web arrives.
-      ev.push(...stepMatch(m, [makeInput({ special: i === 0 }), makeInput({ dodge: i === 10 })]));
+      ev.push(...stepMatch(m, [makeInput({ special: i === 0 }), makeInput({ dodge: i === 10, down: i === 10 })]));
     }
     expect(ev.some((e) => e.type === 'hit')).toBe(false);
   });

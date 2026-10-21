@@ -90,11 +90,12 @@ export class MenuScene extends Phaser.Scene {
       ['Light attack (air: aerial)', 'F'],
       ['Heavy attack', 'G'],
       ['Special', 'H'],
-      ['Dodge', 'Left Shift'],
+      ['Shield (hold) · Roll · Spot dodge', 'L-Shift · +A/D · +S'],
+      ['On a ledge: climb · jump · roll · let go', 'A/D toward · W · L-Shift · S/away'],
     ];
     const objs: Phaser.GameObjects.GameObject[] = [dim, p, h];
     rows.forEach((r, i) => {
-      const y = cy - 180 + i * 38;
+      const y = cy - 184 + i * 34;
       const style = i === 0 ? '#ffd23f' : '#ffffff';
       objs.push(this.add.text(cx - 380, y, r[0], { fontFamily: FONT_BODY, fontSize: '19px', fontStyle: '700', color: UI.muted }).setOrigin(0, 0.5));
       objs.push(bodyText(this, cx + 200, y, r[1], 20, i === 0 ? '#ff4d5e' : style, '900'));
@@ -106,7 +107,7 @@ export class MenuScene extends Phaser.Scene {
       'TRAINING: endless practice vs a dummy · Esc opens training settings · R resets positions · T resets dummy % · B changes dummy behavior.',
       'Esc pauses a match · M toggles sound (volumes under AUDIO) · ` (backtick) shows hitboxes.',
     ];
-    rules.forEach((line, i) => objs.push(bodyText(this, cx, cy + 116 + i * 26, line, 15, '#e8e5ff', '500')));
+    rules.forEach((line, i) => objs.push(bodyText(this, cx, cy + 122 + i * 24, line, 15, '#e8e5ff', '500')));
     objs.push(displayText(this, cx, cy + 256, 'PRESS ESC OR CLICK TO CLOSE', 16, '#b9b4e6', UI.inkCss, 4));
     dim.on('pointerdown', () => this.closeHelp());
     this.overlay = objs;

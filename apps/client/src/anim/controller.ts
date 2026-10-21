@@ -39,6 +39,20 @@ const LANDING: Partial<Pose> = { bob: 10, lean: 0.25, legF: [0.7, 1.4], legB: [-
 const DODGE: Partial<Pose> = { bob: 12, lean: 0.5, armF: [0.9, 2.0], armB: [0.5, 2.0], legF: [0.9, 1.8], legB: [0.3, 1.6], alpha: 0.55 };
 const JUMP_START: Partial<Pose> = { bob: -4, lean: -0.05, legF: [0.1, 0], legB: [-0.1, 0.05], armF: [2.4, 0.2], armB: [1.9, 0.2] };
 const TUCK: Partial<Pose> = { legF: [1.0, 1.8], legB: [0.6, 1.6], armF: [2.8, 0.2], armB: [-2.6, 0.2] };
+/** Hanging by the hands from a ledge (local space: the ledge is up and in front). */
+const LEDGE_HANG: Partial<Pose> = { lean: -0.12, bob: 0, armF: [2.85, 0.15], armB: [2.65, 0.2], legF: [0.12, 0.35], legB: [-0.1, 0.45] };
+const LEDGE_PULL: Partial<Pose> = { lean: 0.35, bob: 6, armF: [1.2, 1.6], armB: [0.9, 1.8], legF: [1.2, 1.9], legB: [0.5, 1.6] };
+/** Guarding behind the shield bubble. */
+const SHIELD_GUARD: Partial<Pose> = { lean: 0.12, bob: 5, armF: [1.55, 1.5], armB: [1.3, 1.7], legF: [0.35, 0.5], legB: [-0.3, 0.45], expression: 'focus' };
+
+function dizzyPose(t: number): Partial<Pose> {
+  return {
+    lean: Math.sin(t * 0.09) * 0.18, bob: 3, headTilt: Math.sin(t * 0.13) * 0.35,
+    armF: [0.2 + Math.sin(t * 0.11) * 0.2, 0.3], armB: [-0.2 - Math.sin(t * 0.11) * 0.2, 0.3],
+    legF: [0.15, 0.25], legB: [-0.15, 0.2], expression: 'hurt',
+  };
+}
+
 const THRUSTER: Partial<Pose> = { legF: [0.15, 0.1], legB: [-0.1, 0.1], armF: [0.9, 0.6], armB: [-0.4, 0.6], lean: 0.1 };
 
 function hurtPose(t: number): Partial<Pose> {
@@ -258,6 +272,25 @@ export class AnimationController {
       case 'hit':
         target = P({ ...prof.stance, ...hurtPose(this.clock) });
         break;
+      case 'ledgeHang':
+        target = P({ ...prof.stance, ...LEDGE_HANG, legF: [0.12 + Math.sin(this.clock * 0.08) * 0.08, 0.35], prop: null });
+        break;
+      case 'ledgeClimb': {
+        // Pull up (first half), then step onto the stage.
+        const u = clamp01(this.stateTime / 22);
+        target = u < 0.55 ? mix(P({ ...prof.stance, ...LEDGE_HANG }), P({ ...prof.stance, ...LEDGE_PULL }), easeOut(u / 0.55))
+          : mix(P({ ...prof.stance, ...LEDGE_PULL }), idlePose(prof, t), easeInOut((u - 0.55) / 0.45));
+        break;
+      }
+      case 'ledgeRoll':
+        target = P({ ...prof.stance, ...DODGE, ...TUCK, alpha: 0.8, spin: this.stateTime * 0.3 });
+        break;
+      case 'shield':
+        target = P({ ...prof.stance, ...SHIELD_GUARD });
+        break;
+      case 'shieldBreak':
+        target = P({ ...prof.stance, ...dizzyPose(this.clock) });
+        break;
       case 'knockback':
         this.tumbleSpin -= 0.35;
         target = P({ ...prof.stance, ...hurtPose(this.clock), spin: this.tumbleSpin });
@@ -403,6 +436,21 @@ export function sampleStateFrame(fighter: FighterId, state: AnimState, t: number
       break;
     case 'hit':
       pose = P({ ...stance, ...hurtPose(tt) });
+      break;
+    case 'ledgeHang':
+      pose = P({ ...stance, ...LEDGE_HANG, prop: null });
+      break;
+    case 'ledgeClimb':
+      pose = mix(P({ ...stance, ...LEDGE_HANG }), P({ ...stance, ...LEDGE_PULL }), 0.5 + Math.sin(tt * 0.08) * 0.5);
+      break;
+    case 'ledgeRoll':
+      pose = P({ ...stance, ...DODGE, ...TUCK, alpha: 0.8, spin: tt * 0.3 });
+      break;
+    case 'shield':
+      pose = P({ ...stance, ...SHIELD_GUARD });
+      break;
+    case 'shieldBreak':
+      pose = P({ ...stance, ...dizzyPose(tt) });
       break;
     case 'knockback':
     case 'ko':

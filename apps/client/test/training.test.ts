@@ -93,7 +93,7 @@ describe('TrainingSession', () => {
 
   it('cycles dummy behaviours and resets positions', () => {
     const s = session();
-    expect(s.cycleBehavior()).toBe('jump');
+    expect(s.cycleBehavior()).toBe('shield');
     expect(s.cycleBehavior(-1)).toBe('stand');
     stand(s.match);
     for (let i = 0; i < 20; i++) s.step(i === 0 ? makeInput({ heavy: true }) : emptyInput());

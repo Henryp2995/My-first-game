@@ -2,13 +2,13 @@ import Phaser from 'phaser';
 import type { AnimFrame } from '../../anim/controller';
 import type { AnimState } from '../../anim/states';
 import type { DrawResult } from '../art';
-import { DEFAULT_FPS, LOOPING_STATES, type SpriteSheetSpec } from './manifest';
+import { DEFAULT_FPS, LOOPING_STATES, SPRITE_FALLBACKS, type SpriteSheetSpec } from './manifest';
 import type { CharacterRenderer, DrawOptions } from './types';
 
 /**
  * Draws a fighter from texture-atlas frames named `<state>_<index>`. Looping states play at the
  * manifest fps; attacks map their frames onto the move's real progress so sprites stay in sync
- * with hitboxes. Missing states fall back to `idle`.
+ * with hitboxes. Missing states fall back to the closest available art (SPRITE_FALLBACKS), then `idle`.
  */
 export class SpriteCharacter implements CharacterRenderer {
   readonly kind = 'sprite' as const;
@@ -41,7 +41,7 @@ export class SpriteCharacter implements CharacterRenderer {
 
   /** Picks the frame for an AnimFrame (exposed for tests and debugging). */
   pickFrame(frame: AnimFrame): string {
-    const state = this.frameCounts.has(frame.state) ? frame.state : 'idle';
+    const state = [frame.state, ...(SPRITE_FALLBACKS[frame.state] ?? [])].find((s) => this.frameCounts.has(s)) ?? 'idle';
     const count = this.frameCounts.get(state) ?? 1;
     let index: number;
     if (frame.attackPhase) {

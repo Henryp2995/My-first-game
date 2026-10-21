@@ -180,6 +180,7 @@ describe('hitstun', () => {
   it('blocks attacking during hitstun, keeps momentum, then returns control', () => {
     const m = setupMatch(['gnw', 'luigi']);
     faceOff(m);
+    faceOff(m, 40, -250); // mid-stage, so the victim doesn't fly to the ledge and grab it
     m.fighters[1].damage = 60;
     const hit = attackAndGetHit(m, 'heavy')!;
     const v = m.fighters[1];
@@ -333,7 +334,8 @@ describe('movement physics', () => {
     const f = m.fighters[0];
     // Below the lip, beside the main platform's left wall, moving away from it.
     f.x = -455; f.y = 60; f.grounded = false; f.action = 'air'; f.jumpsUsed = 2; f.vx = 50;
-    run(m, 5, [makeInput({ right: true }), emptyInput()]);
+    // (Holding down so it doesn't grab the ledge, which would legitimately refresh jumps.)
+    run(m, 5, [makeInput({ right: true, down: true }), emptyInput()]);
     expect(f.grounded).toBe(false);
     expect(f.jumpsUsed).toBe(2);
   });

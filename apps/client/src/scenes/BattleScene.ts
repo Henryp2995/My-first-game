@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import {
-  createMatch, DUMMY_BEHAVIOR_LABEL, emptyInput, FIGHTERS, getStage, standings, stepMatch, TRAINING_RULES,
+  createMatch, DUMMY_BEHAVIOR_LABEL, emptyInput, FIGHTERS, getStage, shieldMax, standings, stepMatch, TRAINING_RULES,
   type FighterState, type GameEvent, type MatchState, type StageCamera,
 } from '@arena-rush/shared';
 import { music } from '../audio/music';
@@ -27,6 +27,8 @@ interface HudCard {
   container: Phaser.GameObjects.Container;
   damage: Phaser.GameObjects.Text;
   stocks: Phaser.GameObjects.Graphics;
+  /** Shield meter, shown while the shield is up or not full. */
+  shield: Phaser.GameObjects.Graphics;
 
   shownDamage: number;
   shake: number;
@@ -61,7 +63,10 @@ export class BattleScene extends Phaser.Scene {
   /** Training Mode only. */
   private training: TrainingSession | null = null;
   private trainingPanel: OptionsPanel | null = null;
-  private trainingHud: { combo: Phaser.GameObjects.Text; detail: Phaser.GameObjects.Text; dummy: Phaser.GameObjects.Text; recent: Phaser.GameObjects.Text } | null = null;
+  private trainingHud: {
+    combo: Phaser.GameObjects.Text; detail: Phaser.GameObjects.Text; dummy: Phaser.GameObjects.Text;
+    shield: Phaser.GameObjects.Text; recent: Phaser.GameObjects.Text;
+  } | null = null;
   private comboWasActive = false;
   /** HUD portraits and off-screen bubbles, drawn with the same renderer as the match. */
   private hudFigures!: FigureCache;
@@ -192,9 +197,10 @@ export class BattleScene extends Phaser.Scene {
       }).setOrigin(0, 0.5);
       const damage = displayText(this, 70, 8, '0%', 44, '#ffffff', UI.inkCss, 8);
       const stocks = this.add.graphics();
-      const container = this.add.container(x, y, [bg, tag, role, name, stocks, damage]);
+      const shield = this.add.graphics();
+      const container = this.add.container(x, y, [bg, tag, role, name, stocks, shield, damage]);
       add(container);
-      this.cards.push({ container, damage, stocks, shownDamage: 0, shake: 0 });
+      this.cards.push({ container, damage, stocks, shield, shownDamage: 0, shake: 0 });
     });
 
     this.offscreen = add(this.add.graphics());
@@ -215,12 +221,13 @@ export class BattleScene extends Phaser.Scene {
     const y = 46;
     const bg = add(this.add.graphics());
     bg.fillStyle(UI.ink, 0.55);
-    bg.fillRoundedRect(x - 6, y - 6, 300, 122, 12);
+    bg.fillRoundedRect(x - 6, y - 6, 340, 144, 12);
     const combo = add(displayText(this, x + 4, y + 16, '', 26, '#ffd23f', UI.inkCss, 6).setOrigin(0, 0.5));
     const detail = add(bodyText(this, x + 4, y + 44, '', 13, '#ffffff', '700').setOrigin(0, 0.5));
     const dummy = add(bodyText(this, x + 4, y + 66, '', 13, '#ffffff', '700').setOrigin(0, 0.5));
-    const recent = add(bodyText(this, x + 4, y + 92, '', 12, '#b9b4e6', '700').setOrigin(0, 0.5));
-    this.trainingHud = { combo, detail, dummy, recent };
+    const shield = add(bodyText(this, x + 4, y + 88, '', 13, '#7ee0ff', '700').setOrigin(0, 0.5));
+    const recent = add(bodyText(this, x + 4, y + 112, '', 12, '#b9b4e6', '700').setOrigin(0, 0.5));
+    this.trainingHud = { combo, detail, dummy, shield, recent };
   }
 
   private updateTrainingHud(): void {
@@ -234,6 +241,10 @@ export class BattleScene extends Phaser.Scene {
     h.detail.setVisible(on).setText(`Combo ${c.damage.toFixed(1)}%  ·  Last hit ${c.lastDamage.toFixed(1)}%  ·  Best ${c.best}`);
     const d = this.match.fighters[t.dummyId];
     h.dummy.setText(`Dummy ${FIGHTERS[d.fighter].name} ${Math.round(d.damage)}%  ·  ${DUMMY_BEHAVIOR_LABEL[t.settings.behavior]}`);
+    const p = this.match.fighters[t.playerId];
+    const shieldText = (f: FighterState) => (f.action === 'shieldBreak' ? 'BROKEN' : `${Math.round((f.shieldHp / shieldMax(this.match.rules, f)) * 100)}%`);
+    const ledgeText = (f: FighterState) => (f.action === 'ledge' ? ' ⟂ledge' : '');
+    h.shield.setText(`Shield: you ${shieldText(p)}${ledgeText(p)} · dummy ${shieldText(d)}${ledgeText(d)}`);
     h.recent.setText(t.recent.length ? `You: ${t.recent.join(' › ')}` : 'You: —');
     // Celebrate a finished combo of 2+ hits.
     if (on && this.comboWasActive && !c.active && c.hits >= 2) this.popup(`${c.hits} HIT COMBO!`, d.x, d.y - 120, '#ffd23f');
@@ -251,7 +262,7 @@ export class BattleScene extends Phaser.Scene {
     this.trainingPanel = openOptionsPanel(this, {
       title: 'TRAINING',
       width: 680,
-      rowH: 46,
+      rowH: 38,
       rows: [
         {
           label: 'DUMMY BEHAVIOR',
@@ -284,6 +295,13 @@ export class BattleScene extends Phaser.Scene {
           },
         },
         { label: 'RESET DUMMY DAMAGE', value: () => 'Enter', valueColor: () => UI.muted, press: () => t.resetDummyDamage() },
+        {
+          label: 'DUMMY SHIELD',
+          value: () => `◀  ${Math.round(t.dummyShieldPercent)}%  ▶`,
+          adjust: (d) => t.cycleDummyShield(d),
+        },
+        { label: 'LEDGE: HANG DUMMY', value: () => 'Enter', valueColor: () => UI.muted, press: () => t.hangOnLedge('dummy') },
+        { label: 'LEDGE: HANG ME', value: () => 'Enter', valueColor: () => UI.muted, press: () => t.hangOnLedge('player') },
         { label: 'RESET POSITIONS', value: () => 'Enter', valueColor: () => UI.muted, press: () => this.resetTrainingPositions(false) },
         {
           label: 'COMBO COUNTER',
@@ -391,6 +409,18 @@ export class BattleScene extends Phaser.Scene {
         card.stocks.fillCircle(-42 + k * 20, -6, 7);
         card.stocks.lineStyle(2, 0xffffff, filled ? 1 : 0.3);
         card.stocks.strokeCircle(-42 + k * 20, -6, 7);
+      }
+
+      // Shield meter (only when relevant: shielding, broken, or still regenerating).
+      const max = shieldMax(this.match.rules, f);
+      const ratio = Math.max(0, Math.min(1, f.shieldHp / max));
+      card.shield.clear();
+      if (!f.eliminated && (ratio < 0.999 || f.action === 'shield')) {
+        const broken = f.action === 'shieldBreak';
+        card.shield.fillStyle(0x000000, 0.45);
+        card.shield.fillRoundedRect(-50, 36, 180, 7, 3);
+        card.shield.fillStyle(broken ? 0xff3b3b : ratio < 0.3 ? 0xff7a3b : ratio < 0.6 ? 0xffb347 : 0x7ee0ff, 1);
+        if (ratio > 0) card.shield.fillRoundedRect(-50, 36, Math.max(7, 180 * ratio), 7, 3);
       }
 
       const frame = previewFrame(f.fighter, f.action === 'hitstun' ? 'hit' : 'idle', f.action === 'hitstun' ? 0 : this.frameCount);
@@ -567,6 +597,31 @@ export class BattleScene extends Phaser.Scene {
           this.showCenter('GO!', '#ffd23f', 500);
         }
         break;
+      case 'ledgeGrab':
+        sound.ledgeGrab();
+        this.effects.ledgeSpark(e.x, e.y);
+        break;
+      case 'ledgeAction':
+        if (e.kind === 'climb' || e.kind === 'roll') sound.ledgeClimb();
+        break;
+      case 'shield':
+        if (e.up) sound.shieldUp();
+        break;
+      case 'shieldHit': {
+        const v = fighters[e.victim];
+        sound.shieldHit(e.health / shieldMax(this.match.rules, v));
+        this.effects.burst(e.x, e.y, 0x7ee0ff);
+        break;
+      }
+      case 'shieldBreak': {
+        sound.shieldBreak();
+        const f = fighters[e.id];
+        this.effects.shieldShatter(e.x, e.y - FIGHTERS[f.fighter].stats.height * 0.5, slotColor(this.setup, e.id));
+        this.cameras.main.shake(260, 0.01);
+        this.cameras.main.flash(90, 255, 255, 255);
+        this.popup('SHIELD BREAK!', e.x, e.y - 130, '#ff8a3b');
+        break;
+      }
       case 'jump':
         if (fighters[e.id].fighter === 'gundam') sound.thruster();
         else sound.jump(e.double);

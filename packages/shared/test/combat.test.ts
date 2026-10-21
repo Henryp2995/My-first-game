@@ -243,7 +243,7 @@ describe('dodging', () => {
   it('grants invulnerability for ~0.25s then becomes hittable', () => {
     const m = setupMatch(['gnw', 'luigi']);
     face(m);
-    tap(m, 1, { dodge: true });
+    tap(m, 1, { dodge: true, down: true }); // spot dodge
     const v = m.fighters[1];
     expect(v.action).toBe('dodge');
     expect(DEFAULT_RULES.dodge.invulnFrames).toBe(15);
@@ -253,21 +253,22 @@ describe('dodging', () => {
     expect(v.damage).toBe(0);
   });
 
-  it('dodge has a 1.5s cooldown', () => {
+  it('dodge has a 0.75s cooldown', () => {
     const m = setupMatch();
-    tap(m, 0, { dodge: true });
+    expect(DEFAULT_RULES.dodge.cooldownFrames).toBe(45);
+    tap(m, 0, { dodge: true, down: true });
     run(m, DEFAULT_RULES.dodge.totalFrames + 2);
-    const again = tap(m, 0, { dodge: true });
+    const again = tap(m, 0, { dodge: true, down: true });
     expect(again.some((e) => e.type === 'dodge')).toBe(false);
     run(m, DEFAULT_RULES.dodge.cooldownFrames);
-    const later = tap(m, 0, { dodge: true });
+    const later = tap(m, 0, { dodge: true, down: true });
     expect(later.some((e) => e.type === 'dodge')).toBe(true);
   });
 
   it('is hittable again after invulnerability ends', () => {
     const m = setupMatch(['gnw', 'luigi']);
     face(m);
-    tap(m, 1, { dodge: true });
+    tap(m, 1, { dodge: true, down: true });
     run(m, DEFAULT_RULES.dodge.totalFrames + 2);
     const ev = [...tap(m, 0, { light: true }), ...run(m, 10)];
     expect(ev.some((e) => e.type === 'hit')).toBe(true);

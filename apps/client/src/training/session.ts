@@ -3,11 +3,13 @@
  * settings, and steps the *normal* shared simulation. No Phaser here so it can be unit-tested.
  */
 import {
-  ComboTracker, DUMMY_BEHAVIORS, resetPositions, setFighterDamage, stepMatch, TrainingDummyController,
-  type DummyBehavior, type GameEvent, type InputFrame, type MatchState,
+  ComboTracker, DUMMY_BEHAVIORS, hangOnNearestLedge, resetPositions, setFighterDamage, setFighterShield, shieldMax, stepMatch,
+  TrainingDummyController, type DummyBehavior, type GameEvent, type InputFrame, type MatchState,
 } from '@arena-rush/shared';
 
 export const DAMAGE_PRESETS = [0, 25, 50, 75, 100, 150] as const;
+/** Dummy shield health presets, as a percentage of its max shield. */
+export const SHIELD_PRESETS = [100, 75, 50, 25, 10, 1] as const;
 
 /** How forgiving the combo counter is: frames the dummy may be free before the combo breaks. */
 export const COMBO_WINDOWS = [
@@ -110,6 +112,31 @@ export class TrainingSession {
     this.combo.reset();
     // Drop anything the dummy had queued (e.g. a jump) so it starts the reset standing still.
     this.dummy.setBehavior(this.settings.behavior);
+  }
+
+  get dummyShieldPercent(): number {
+    const d = this.match.fighters[this.dummyId];
+    return (d.shieldHp / shieldMax(this.match.rules, d)) * 100;
+  }
+
+  /** Sets the dummy's shield to a percentage of its max (immediately). */
+  setDummyShield(percent: number): void {
+    const d = this.match.fighters[this.dummyId];
+    setFighterShield(this.match, this.dummyId, (shieldMax(this.match.rules, d) * percent) / 100);
+  }
+
+  cycleDummyShield(dir: 1 | -1): number {
+    const list = [...SHIELD_PRESETS];
+    const cur = Math.round(this.dummyShieldPercent);
+    const next = dir > 0 ? list.find((p) => p < cur) ?? list[0] : [...list].reverse().find((p) => p > cur) ?? list[list.length - 1];
+    this.setDummyShield(next);
+    return next;
+  }
+
+  /** Ledge practice: hang the dummy (or yourself) on the nearest ledge. */
+  hangOnLedge(who: 'dummy' | 'player'): boolean {
+    this.combo.reset();
+    return hangOnNearestLedge(this.match, who === 'dummy' ? this.dummyId : this.playerId);
   }
 
   setComboWindow(index: number): void {

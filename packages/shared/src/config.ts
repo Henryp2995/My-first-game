@@ -28,6 +28,63 @@ export interface RulesConfig {
   dropThroughFrames: number;
   /** Fighters touching a solid platform's side within this many px of its top pop up onto it. */
   ledgeSnap: number;
+  /** Ledge grabbing. Ledges come from stage geometry (see stageLedges). */
+  ledge: {
+    /** Max horizontal distance (px) between a fighter and the hang position to grab. */
+    grabRangeX: number;
+    /** How far above / below the hang position (feet) a fighter may be to grab. */
+    grabAbove: number;
+    grabBelow: number;
+    /** A solid corner is grabbable only if this much open space (px) is below the lip, outside. */
+    wallClearance: number;
+    /** Head pokes this far above the lip while hanging. */
+    hangHeadroom: number;
+    /** Invulnerability on the first grab of an airtime (no invulnerability on regrabs). */
+    invulnFrames: number;
+    /** Frames after leaving a ledge before any ledge can be grabbed again. */
+    regrabCooldownFrames: number;
+    /** Grabs allowed per airtime (reset by landing or being hit) — prevents ledge stalling. */
+    maxGrabsPerAirtime: number;
+    /** Hanging this long drops the fighter automatically. */
+    maxHangFrames: number;
+    /** Inputs are ignored for the first frames of a hang (so a held direction doesn't instantly act). */
+    actionDelayFrames: number;
+    climbFrames: number;
+    climbIntangibleFrames: number;
+    rollFrames: number;
+    rollIntangibleFrames: number;
+    rollDistance: number;
+    /** Ledge jump = this × the fighter's ground jump. */
+    jumpScale: number;
+  };
+  /** Shields (hold the dodge button on the ground). */
+  shield: {
+    /** Default max shield health (fighters may override with stats.shieldMax). */
+    maxHealth: number;
+    /** Health lost per second while held. */
+    drainPerSecond: number;
+    /** Health regained per second once released (after regenDelayFrames). */
+    regenPerSecond: number;
+    regenDelayFrames: number;
+    /** Shield damage of a blocked hit = damage × damageMultiplier + damageBase (unless the hit overrides it). */
+    damageMultiplier: number;
+    damageBase: number;
+    /** Shieldstun frames = stunBase + damage × stunPerDamage, capped at stunMax. */
+    stunBase: number;
+    stunPerDamage: number;
+    stunMax: number;
+    /** Blocked hits push the shielder back: px/s = pushbackBase + damage × pushbackPerDamage. */
+    pushbackBase: number;
+    pushbackPerDamage: number;
+    /** A tapped shield stays up at least this long. */
+    minFrames: number;
+    /** Lag after dropping the shield. */
+    releaseFrames: number;
+    /** Shield break: helpless stun length, upward pop, and health restored afterwards. */
+    breakStunFrames: number;
+    breakLaunchSpeed: number;
+    breakRecoverHealth: number;
+  };
   dodge: {
     invulnFrames: number;
     totalFrames: number;
@@ -117,10 +174,48 @@ export const DEFAULT_RULES: RulesConfig = {
   attackBufferFrames: 6,
   dropThroughFrames: 14,
   ledgeSnap: 40,
+  ledge: {
+    grabRangeX: 36,
+    grabAbove: 36,
+    grabBelow: 56,
+    wallClearance: 120,
+    hangHeadroom: 14,
+    invulnFrames: 40,
+    regrabCooldownFrames: 30,
+    maxGrabsPerAirtime: 4,
+    maxHangFrames: 300, // 5 s
+    actionDelayFrames: 6,
+    climbFrames: 22,
+    climbIntangibleFrames: 14,
+    rollFrames: 34,
+    rollIntangibleFrames: 22,
+    rollDistance: 120,
+    jumpScale: 1.05,
+  },
+  shield: {
+    maxHealth: 100,
+    drainPerSecond: 8,
+    regenPerSecond: 14,
+    regenDelayFrames: 45,
+    // Lights (3–5%) → ~10–12 shield damage, heavies (11–15%) → ~22–28.
+    damageMultiplier: 1.5,
+    damageBase: 5,
+    stunBase: 3,
+    stunPerDamage: 0.55,
+    stunMax: 18,
+    pushbackBase: 90,
+    pushbackPerDamage: 22,
+    minFrames: 4,
+    releaseFrames: 7,
+    breakStunFrames: 180, // 3 s
+    breakLaunchSpeed: 620,
+    breakRecoverHealth: 35,
+  },
   dodge: {
     invulnFrames: 15, // 0.25 s
     totalFrames: 24,
-    cooldownFrames: 90, // 1.5 s
+    // Was 90 (1.5 s), longer than most moves' total duration: one dodge left you defenceless.
+    cooldownFrames: 45, // 0.75 s
     rollSpeed: 520,
     airDodgeSpeed: 420,
     airDodgesPerAirtime: 1,
@@ -170,8 +265,10 @@ export const DEFAULT_RULES: RulesConfig = {
 };
 
 /** Partial overrides, nested one level deep (e.g. `{ combat: { hitstopMax: 6 } }`). */
-export type RulesOverrides = Partial<Omit<RulesConfig, 'dodge' | 'movement' | 'combat'>> & {
+export type RulesOverrides = Partial<Omit<RulesConfig, 'dodge' | 'movement' | 'combat' | 'ledge' | 'shield'>> & {
   dodge?: Partial<RulesConfig['dodge']>;
+  ledge?: Partial<RulesConfig['ledge']>;
+  shield?: Partial<RulesConfig['shield']>;
   movement?: Partial<RulesConfig['movement']>;
   combat?: Partial<Omit<RulesConfig['combat'], 'knockback'>> & { knockback?: Partial<RulesConfig['combat']['knockback']> };
 };
@@ -186,6 +283,8 @@ export function makeRules(overrides: RulesOverrides = {}): RulesConfig {
     ...DEFAULT_RULES,
     ...overrides,
     dodge: { ...DEFAULT_RULES.dodge, ...(overrides.dodge ?? {}) },
+    ledge: { ...DEFAULT_RULES.ledge, ...(overrides.ledge ?? {}) },
+    shield: { ...DEFAULT_RULES.shield, ...(overrides.shield ?? {}) },
     movement: { ...DEFAULT_RULES.movement, ...(overrides.movement ?? {}) },
     combat,
   };

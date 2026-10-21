@@ -8,18 +8,23 @@
 import { makeRules, type RulesConfig } from './config';
 import { CpuController } from './cpu';
 import { emptyInput, makeInput, type InputFrame } from './input';
-import { createFighter, currentMove, isActionable, type FighterState, type GameEvent, type MatchState } from './match';
+import {
+  createFighter, currentMove, isActionable, isOnLedge, placeOnLedge, shieldMax, type FighterState, type GameEvent, type MatchState,
+} from './match';
+import { solidExtent, stageLedges } from './stage';
 
 /** Unlimited stocks, no clock, no countdown — the match never ends on its own. */
 export const TRAINING_RULES: RulesConfig = makeRules({ infiniteStocks: true, timed: false, countdownFrames: 0 });
 
-export type DummyBehavior = 'stand' | 'jump' | 'defend' | 'attack' | 'cpu';
-export const DUMMY_BEHAVIORS: DummyBehavior[] = ['stand', 'jump', 'defend', 'attack', 'cpu'];
+export type DummyBehavior = 'stand' | 'shield' | 'jump' | 'defend' | 'attack' | 'recover' | 'cpu';
+export const DUMMY_BEHAVIORS: DummyBehavior[] = ['stand', 'shield', 'jump', 'defend', 'attack', 'recover', 'cpu'];
 export const DUMMY_BEHAVIOR_LABEL: Record<DummyBehavior, string> = {
   stand: 'Stand Still',
+  shield: 'Hold Shield',
   jump: 'Jump',
-  defend: 'Defend',
+  defend: 'Defend (shield/roll)',
   attack: 'Attack',
+  recover: 'Recover to Ledge',
   cpu: 'Normal CPU',
 };
 
@@ -55,12 +60,19 @@ export class TrainingDummyController {
     this._behavior = b;
     this.clock = 0;
     this.queue = [];
-    this.cpu = b === 'cpu' ? new CpuController(this.id, 'normal', this.seed) : null;
+    // "Recover" borrows the CPU's recovery + ledge logic (only while offstage / on a ledge).
+    this.cpu = b === 'cpu' ? new CpuController(this.id, 'normal', this.seed)
+      : b === 'recover' ? new CpuController(this.id, 'hard', this.seed) : null;
   }
 
   decide(m: MatchState): InputFrame {
     this.clock++;
-    if (this.cpu) return this.cpu.decide(m);
+    if (this.cpu) {
+      const cpuInput = this.cpu.decide(m);
+      if (this._behavior === 'cpu') return cpuInput;
+      const me = m.fighters[this.id];
+      return me && this.needsRecovery(m, me) ? cpuInput : emptyInput();
+    }
     const me = m.fighters[this.id];
     if (m.phase !== 'playing' || !me || me.eliminated || me.action === 'dead' || me.action === 'respawning') {
       this.queue = [];
@@ -81,13 +93,23 @@ export class TrainingDummyController {
     switch (this._behavior) {
       case 'stand':
         return;
+      case 'shield':
+        // Keep the shield button held; it re-raises by itself after a break or release lag.
+        if (me.grounded) this.queue = [{ dodge: true }];
+        return;
       case 'jump':
         // Hold jump a few frames for a full jump, straight up.
         if (this.clock % JUMP_EVERY === 0 && me.grounded && isActionable(me)) this.queue = Array(8).fill({ jump: true });
         return;
-      case 'defend':
-        if (isActionable(me) && me.dodgeCooldown === 0 && this.threatened(m, me)) this.queue = [{ dodge: true }, {}];
+      case 'defend': {
+        if (!me.grounded || !isActionable(me) || !this.threatened(m, me)) return;
+        const foe = this.foe(m);
+        const away = foe && foe.x > me.x ? { left: true } : { right: true };
+        // Shield while it's healthy; roll away once it's low (instead of letting it break).
+        if (me.shieldHp > shieldMax(m.rules, me) * 0.3) this.queue = Array(24).fill({ dodge: true });
+        else if (me.dodgeCooldown === 0) this.queue = [{ dodge: true, ...away }, {}];
         return;
+      }
       case 'attack': {
         const foe = this.foe(m);
         if (!foe || this.clock % ATTACK_EVERY !== 0 || !isActionable(me) || !me.grounded) return;
@@ -104,6 +126,14 @@ export class TrainingDummyController {
       default:
         return;
     }
+  }
+
+  /** Offstage, under the stage, hanging on a ledge, or tumbling: time to (let the CPU) recover. */
+  private needsRecovery(m: MatchState, me: FighterState): boolean {
+    if (isOnLedge(me) || me.action === 'hitstun') return true;
+    if (me.grounded) return false;
+    const { x1, x2 } = solidExtent(m.stage);
+    return me.x < x1 || me.x > x2 || me.y > 10;
   }
 
   private threatened(m: MatchState, me: FighterState): boolean {
@@ -165,6 +195,24 @@ export class ComboTracker {
   }
 }
 
+/** Sets a fighter's shield health directly (clamped to 0..max; at least 1 so it isn't "broken"). */
+export function setFighterShield(m: MatchState, id: number, health: number): void {
+  const f = m.fighters[id];
+  if (!f) return;
+  f.shieldHp = Math.min(shieldMax(m.rules, f), Math.max(1, Number.isFinite(health) ? health : 1));
+}
+
+/** Hangs a fighter on the ledge nearest to them (Training: ledge practice). */
+export function hangOnNearestLedge(m: MatchState, id: number): boolean {
+  const f = m.fighters[id];
+  const ledges = stageLedges(m.stage, m.rules.ledge.wallClearance);
+  if (!f || !ledges.length || f.action === 'dead' || f.action === 'respawning') return false;
+  const free = ledges.filter((l) => !m.fighters.some((o) => o !== f && isOnLedge(o) && o.ledge?.x === l.x && o.ledge?.y === l.y));
+  const pick = (free.length ? free : ledges).reduce((a, b) => (Math.abs(b.x - f.x) < Math.abs(a.x - f.x) ? b : a));
+  placeOnLedge(m, f, pick);
+  return true;
+}
+
 /** Sets a fighter's damage directly (clamped to the game's 0–999%). */
 export function setFighterDamage(m: MatchState, id: number, percent: number): void {
   const f = m.fighters[id];
@@ -180,7 +228,7 @@ export function setFighterDamage(m: MatchState, id: number, percent: number): vo
  */
 export function resetPositions(m: MatchState): void {
   for (const f of m.fighters) {
-    const fresh = createFighter(f.id, f.fighter, m.stage, f.stocks);
+    const fresh = createFighter(f.id, f.fighter, m.stage, f.stocks, m.rules);
     const { damage, stats, stocks } = f;
     Object.assign(f, fresh, { damage, stats, stocks });
   }

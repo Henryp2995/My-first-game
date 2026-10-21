@@ -42,8 +42,8 @@ export class GalleryScene extends Phaser.Scene {
   }
 
   private cell(i: number) {
-    const perRow = 9;
-    return { x: 72 + (i % perRow) * 142, y: 300 + Math.floor(i / perRow) * 300 };
+    const perRow = 8;
+    return { x: 90 + (i % perRow) * 157, y: 220 + Math.floor(i / perRow) * 225 };
   }
 
   update(): void {
@@ -57,7 +57,7 @@ export class GalleryScene extends Phaser.Scene {
         const frame = sampleStateFrame(id, state, this.t / 1.5);
         g.lineStyle(1, 0x14112b, 0.25);
         g.lineBetween(x - 60, y, x + 60, y);
-        drawFighter(g, id, { ...frame.pose, alpha: 1 }, x, y, 1, 1.6, false, false, frame);
+        drawFighter(g, id, { ...frame.pose, alpha: 1 }, x, y, 1, 1.25, false, false, frame);
       });
       return;
     }

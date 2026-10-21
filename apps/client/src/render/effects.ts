@@ -118,6 +118,25 @@ export class Effects {
     this.add({ kind: 'flash', x, y, size: 50, life: 6, maxLife: 6, color: 0xffffff });
   }
 
+  /** Shield break: glassy shards flying outward plus a big ring. */
+  shieldShatter(x: number, y: number, color: number): void {
+    this.add({ kind: 'ring', x, y, size: 40, life: 22, maxLife: 22, color });
+    this.add({ kind: 'flash', x, y, size: 110, life: 8, maxLife: 8, color: 0xffffff });
+    for (let i = 0; i < 18; i++) {
+      const a = (i / 18) * Math.PI * 2 + Math.random() * 0.3;
+      const sp = 260 + Math.random() * 260;
+      this.add({
+        kind: 'confetti', x: x + Math.cos(a) * 20, y: y + Math.sin(a) * 20, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 120,
+        life: 34, maxLife: 34, size: 6 + Math.random() * 6, color: i % 3 === 0 ? 0xffffff : color, angle: a, gravity: 700,
+      });
+    }
+  }
+
+  /** Small sparks where a fighter catches a ledge. */
+  ledgeSpark(x: number, y: number): void {
+    this.add({ kind: 'ring', x, y, size: 10, life: 10, maxLife: 10, color: 0xffffff });
+  }
+
   fire(x: number, y: number): void {
     this.add({
       kind: 'puff', x, y, vx: (Math.random() - 0.5) * 80, vy: -40 - Math.random() * 60,

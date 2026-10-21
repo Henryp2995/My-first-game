@@ -10,10 +10,14 @@ import {
 import { approach, clamp, lerp, rectsOverlap } from './geometry';
 import { emptyInput, type InputFrame } from './input';
 import { nextRandom, randomInt } from './rng';
-import { SKYFALL_ARENA, type Platform, type StageDef } from './stage';
+import { SKYFALL_ARENA, stageLedges, type Ledge, type Platform, type StageDef } from './stage';
 
 export type FighterAction =
-  | 'idle' | 'run' | 'air' | 'attack' | 'hitstun' | 'dodge' | 'landing' | 'dead' | 'respawning';
+  | 'idle' | 'run' | 'air' | 'attack' | 'hitstun' | 'dodge' | 'landing' | 'dead' | 'respawning'
+  // Ledges: hanging, then climbing up or rolling onto the stage.
+  | 'ledge' | 'ledgeClimb' | 'ledgeRoll'
+  // Shields: held, the lag after dropping it, and the helpless stun after it breaks.
+  | 'shield' | 'shieldRelease' | 'shieldBreak';
 
 export type BufferedAction = 'light' | 'heavy' | 'special' | 'dodge';
 
@@ -76,6 +80,19 @@ export interface FighterState {
   buffer: { action: BufferedAction; frames: number } | null;
   respawnTimer: number;
   lastHitBy: number | null;
+  /** The ledge being hung from / climbed (null otherwise). */
+  ledge: Ledge | null;
+  /** Frames until any ledge can be grabbed again. */
+  ledgeCooldown: number;
+  /** Ledge grabs since last landing or being hit. */
+  ledgeGrabs: number;
+  /** Ledge invulnerability already granted this airtime. */
+  ledgeInvulnUsed: boolean;
+  shieldHp: number;
+  /** Frames before shield health starts regenerating. */
+  shieldRegenDelay: number;
+  /** Frames the shield is locked up after blocking a hit. */
+  shieldStun: number;
   prevInput: InputFrame;
   stats: FighterMatchStats;
 }
@@ -101,6 +118,11 @@ export type GameEvent =
   | { type: 'dodge'; id: number }
   | { type: 'ko'; id: number; x: number; y: number; by: number | null }
   | { type: 'respawn'; id: number }
+  | { type: 'ledgeGrab'; id: number; x: number; y: number }
+  | { type: 'ledgeAction'; id: number; kind: 'climb' | 'jump' | 'roll' | 'release' }
+  | { type: 'shield'; id: number; up: boolean }
+  | { type: 'shieldHit'; attacker: number; victim: number; x: number; y: number; shieldDamage: number; health: number }
+  | { type: 'shieldBreak'; id: number; x: number; y: number }
   | { type: 'eliminated'; id: number }
   | { type: 'matchEnd'; winner: number | null; reason: 'stocks' | 'time' };
 
@@ -157,7 +179,7 @@ export interface MatchOptions {
   seed?: number;
 }
 
-export function createFighter(id: number, fighter: FighterId, stage: StageDef, stocks: number): FighterState {
+export function createFighter(id: number, fighter: FighterId, stage: StageDef, stocks: number, rules: RulesConfig = DEFAULT_RULES): FighterState {
   const spawn = stage.spawns[id % stage.spawns.length];
   return {
     id,
@@ -204,6 +226,13 @@ export function createFighter(id: number, fighter: FighterId, stage: StageDef, s
     buffer: null,
     respawnTimer: 0,
     lastHitBy: null,
+    ledge: null,
+    ledgeCooldown: 0,
+    ledgeGrabs: 0,
+    ledgeInvulnUsed: false,
+    shieldHp: FIGHTERS[fighter].stats.shieldMax ?? rules.shield.maxHealth,
+    shieldRegenDelay: 0,
+    shieldStun: 0,
     prevInput: emptyInput(),
     stats: { kos: 0, falls: 0, damageDealt: 0, damageTaken: 0 },
   };
@@ -220,7 +249,7 @@ export function createMatch(players: PlayerSetup[], options: MatchOptions = {}):
     rngState: (options.seed ?? 0x1234abcd) >>> 0,
     rules,
     stage,
-    fighters: players.map((p, i) => createFighter(i, p.fighter, stage, rules.stocks)),
+    fighters: players.map((p, i) => createFighter(i, p.fighter, stage, rules.stocks, rules)),
     projectiles: [],
     nextProjectileId: 1,
     winner: null,
@@ -248,6 +277,8 @@ export function isActionable(f: FighterState): boolean {
 export function isIntangible(f: FighterState, rules: RulesConfig): boolean {
   if (f.action === 'dead' || f.action === 'respawning' || f.eliminated) return true;
   if (f.invuln > 0) return true;
+  if (f.action === 'ledgeClimb' && f.actionFrame < rules.ledge.climbIntangibleFrames) return true;
+  if (f.action === 'ledgeRoll' && f.actionFrame < rules.ledge.rollIntangibleFrames) return true;
   if (f.action === 'dodge' && f.actionFrame < rules.dodge.invulnFrames) return true;
   const move = currentMove(f);
   if (f.action === 'attack' && move?.intangible) {
@@ -351,6 +382,8 @@ function updateFighter(m: MatchState, f: FighterState, input: InputFrame): void 
   if (f.invuln > 0) f.invuln--;
   if (f.dodgeCooldown > 0) f.dodgeCooldown--;
   if (f.dropThrough > 0) f.dropThrough--;
+  if (f.ledgeCooldown > 0) f.ledgeCooldown--;
+  regenShield(m, f);
   if (!f.grounded && f.coyote > 0) f.coyote--;
   for (const k of Object.keys(f.cooldowns) as MoveSlot[]) if (f.cooldowns[k] > 0) f.cooldowns[k]--;
 
@@ -375,9 +408,29 @@ function updateFighter(m: MatchState, f: FighterState, input: InputFrame): void 
     }
   }
 
+  if (f.action === 'ledge' || f.action === 'ledgeClimb' || f.action === 'ledgeRoll') {
+    // Hanging and ledge get-ups are fully scripted: no gravity, no free movement.
+    updateLedge(m, f, input, dir);
+    f.prevInput = { ...input };
+    return;
+  }
+
   switch (f.action) {
     case 'hitstun':
       if (--f.hitstun <= 0) f.action = f.grounded ? 'idle' : 'air';
+      break;
+    case 'shield':
+      updateShield(m, f, input, dir);
+      break;
+    case 'shieldRelease':
+      if (--f.actionFrame <= 0) f.action = f.grounded ? 'idle' : 'air';
+      break;
+    case 'shieldBreak':
+      if (--f.actionFrame <= 0) {
+        f.action = f.grounded ? 'idle' : 'air';
+        f.shieldHp = Math.max(f.shieldHp, m.rules.shield.breakRecoverHealth);
+        f.shieldRegenDelay = 0;
+      }
       break;
     case 'landing':
       if (--f.actionFrame <= 0) f.action = 'idle';
@@ -402,11 +455,27 @@ function tryActions(m: MatchState, f: FighterState, input: InputFrame, dir: numb
   const s = def.stats;
 
   if (f.buffer?.action === 'dodge') {
-    const airDodgeSpent = !f.grounded && f.airDodgesUsed >= m.rules.dodge.airDodgesPerAirtime;
-    if (f.dodgeCooldown <= 0 && !airDodgeSpent) {
-      startDodge(m, f, input, dir);
-      f.buffer = null;
-      return;
+    if (f.grounded) {
+      // Ground: dodge + direction = roll, dodge + down = spot dodge, dodge alone = shield.
+      const roll = dir !== 0;
+      const spot = !roll && input.down;
+      if ((roll || spot) && f.dodgeCooldown <= 0) {
+        startDodge(m, f, input, roll ? dir : 0);
+        f.buffer = null;
+        return;
+      }
+      if ((!roll && !spot) || input.dodge) {
+        startShield(m, f);
+        f.buffer = null;
+        return;
+      }
+    } else {
+      const airDodgeSpent = f.airDodgesUsed >= m.rules.dodge.airDodgesPerAirtime;
+      if (f.dodgeCooldown <= 0 && !airDodgeSpent) {
+        startDodge(m, f, input, dir);
+        f.buffer = null;
+        return;
+      }
     }
   } else if (f.buffer) {
     let slot: MoveSlot = f.buffer.action as MoveSlot;
@@ -418,6 +487,12 @@ function tryActions(m: MatchState, f: FighterState, input: InputFrame, dir: numb
       f.buffer = null;
       return;
     }
+  }
+
+  // Still holding the shield button (e.g. landed or finished a move while holding it): shield up.
+  if (f.grounded && input.dodge && f.prevInput.dodge && dir === 0 && !input.down && f.jumpBuffer === 0 && f.shieldHp >= 1) {
+    startShield(m, f);
+    return;
   }
 
   // Drop through a one-way platform.
@@ -622,6 +697,9 @@ function physics(m: MatchState, f: FighterState, input: InputFrame, dir: number)
     const rolling = f.actionFrame < m.rules.dodge.invulnFrames;
     if (f.grounded) f.vx = approach(f.vx, 0, (rolling ? mv.rollFriction : mv.dodgeEndFriction) * s.groundFriction * DT);
     else f.vx = approach(f.vx, 0, s.airFriction * mv.dodgeEndFriction * DT);
+  } else if (f.action === 'shield' || f.action === 'shieldRelease' || f.action === 'shieldBreak') {
+    // Shielding roots you in place; blocked hits slide you back. A broken shield is helpless.
+    f.vx = approach(f.vx, 0, (f.grounded ? s.groundFriction : s.airFriction) * DT);
   } else if (f.action === 'attack' || f.action === 'landing') {
     if (f.grounded) f.vx = approach(f.vx, 0, s.groundFriction * DT);
     else if (dir !== 0) f.vx = approach(f.vx, dir * s.airSpeed, s.airAccel * DT);
@@ -697,6 +775,12 @@ function physics(m: MatchState, f: FighterState, input: InputFrame, dir: number)
     f.grounded = false;
     if (isActionable(f)) f.coyote = m.rules.coyoteFrames;
   }
+  // Shields only exist on the ground (pushed off an edge → falling).
+  if ((f.action === 'shield' || f.action === 'shieldRelease') && !f.grounded) {
+    f.action = 'air';
+    f.shieldStun = 0;
+  }
+  tryLedgeGrab(m, f, input);
 }
 
 function withinPlatformX(p: Platform, x: number, tolerance: number): boolean {
@@ -739,8 +823,12 @@ function collide(m: MatchState, f: FighterState, prevX: number, prevY: number): 
       const center = (p.x1 + p.x2) / 2;
       const towardStage = (f.x < center && f.vx + f.kbx > 0) || (f.x > center && f.vx + f.kbx < 0);
       const rising = f.vy + f.kby < 0;
-      if (f.y - top <= m.rules.ledgeSnap && f.action !== 'hitstun' && (towardStage || rising)) {
-        // Close enough to the lip: pop up onto the platform (simple ledge recovery).
+      // Steps between platforms (not real ledges) are climbed automatically; at a real ledge an
+      // airborne fighter must grab it instead, unless their feet are already at the lip.
+      const corner: 1 | -1 = f.x < center ? 1 : -1;
+      const autoStep = f.grounded || f.y - top <= 12 || !isLedgeCorner(m, p, corner);
+      if (autoStep && f.y - top <= m.rules.ledgeSnap && f.action !== 'hitstun' && (towardStage || rising)) {
+        // Close enough to the lip of a step: pop up onto the platform.
         f.x = clamp(f.x, p.x1 + 2, p.x2 - 2);
         f.vy = Math.min(f.vy, 0);
         f.kby = 0;
@@ -776,6 +864,8 @@ function land(m: MatchState, f: FighterState, top: number): void {
   f.airUsed = [];
   f.airBoostUsed = false;
   f.airDodgesUsed = 0;
+  f.ledgeGrabs = 0;
+  f.ledgeInvulnUsed = false;
   if (f.action === 'hitstun') {
     // Hitting the floor ends a long tumble quickly instead of sliding around stunned.
     f.hitstun = Math.min(f.hitstun, cb.hitstunLandingCap);
@@ -885,12 +975,15 @@ export interface HitValues {
   hitstunMultiplier: number;
   stunFrames?: number;
   restrain?: RestrainKind;
+  shieldDamage?: number;
+  unblockable?: boolean;
 }
 
 function hitEffectValues(h: HitEffect): HitValues {
   return {
     damage: h.damage, baseKnockback: h.baseKnockback, knockbackGrowth: h.knockbackGrowth, angle: h.angle,
     hitstunMultiplier: h.hitstunMultiplier ?? 1, stunFrames: h.stunFrames, restrain: h.restrain,
+    shieldDamage: h.shieldDamage, unblockable: h.unblockable,
   };
 }
 
@@ -987,7 +1080,10 @@ export function resolveHitboxValues(f: FighterState, move: MoveDef, hb: HitboxDe
     baseKnockback = f.misfire ? b.misfireBaseKnockback : lerp(b.minBaseKnockback, b.maxBaseKnockback, ratio);
   }
   return applyCharge(
-    { damage, baseKnockback, knockbackGrowth, angle, hitstunMultiplier, stunFrames: hb.stunFrames, restrain: hb.restrain },
+    {
+      damage, baseKnockback, knockbackGrowth, angle, hitstunMultiplier, stunFrames: hb.stunFrames, restrain: hb.restrain,
+      shieldDamage: hb.shieldDamage, unblockable: hb.unblockable,
+    },
     move,
     f.charge,
   );
@@ -996,6 +1092,16 @@ export function resolveHitboxValues(f: FighterState, move: MoveDef, hb: HitboxDe
 function applyHit(m: MatchState, h: PendingHit): void {
   const { attacker: att, victim: vic, move, values: v, direction: dir } = h;
   const cb = m.rules.combat;
+  if (vic.action === 'shield' && !v.unblockable) {
+    applyShieldHit(m, h);
+    return;
+  }
+  // A hit ends a shield break (and restores enough shield), and knocks fighters off ledges.
+  if (vic.action === 'shieldBreak') vic.shieldHp = Math.max(vic.shieldHp, m.rules.shield.breakRecoverHealth);
+  vic.shieldStun = 0;
+  vic.ledge = null;
+  vic.ledgeGrabs = 0;
+  vic.ledgeInvulnUsed = false;
 
   vic.damage = Math.min(cb.maxDamage, vic.damage + v.damage);
   const speed = knockbackSpeed(vic.damage, v.damage, v.baseKnockback, v.knockbackGrowth, fighterDef(vic).stats.weight, cb.knockback);
@@ -1076,6 +1182,7 @@ export function koFighter(m: MatchState, f: FighterState): void {
   if (!m.rules.infiniteStocks) f.stocks = Math.max(0, f.stocks - 1);
   f.action = 'dead';
   f.move = null;
+  f.ledge = null;
   f.vx = f.vy = f.kbx = f.kby = 0;
   f.hitstun = 0;
   f.hitstop = 0;
@@ -1105,6 +1212,13 @@ function respawn(m: MatchState, f: FighterState): void {
   f.buffer = null;
   f.jumpBuffer = 0;
   f.cooldowns = { light: 0, heavy: 0, special: 0, aerial: 0 };
+  f.ledge = null;
+  f.ledgeCooldown = 0;
+  f.ledgeGrabs = 0;
+  f.ledgeInvulnUsed = false;
+  f.shieldHp = shieldMax(m.rules, f);
+  f.shieldRegenDelay = 0;
+  f.shieldStun = 0;
   f.action = 'respawning';
   f.respawnTimer = m.rules.respawnHoverFrames;
   f.facing = point.x <= 0 ? 1 : -1;
@@ -1129,4 +1243,273 @@ function endMatch(m: MatchState, winner: number | null, reason: 'stocks' | 'time
   m.winner = winner;
   m.endReason = reason;
   m.events.push({ type: 'matchEnd', winner, reason });
+}
+
+// ---------------------------------------------------------------------------
+// Ledges
+// ---------------------------------------------------------------------------
+
+export function isOnLedge(f: FighterState): boolean {
+  return f.action === 'ledge' || f.action === 'ledgeClimb' || f.action === 'ledgeRoll';
+}
+
+/** Where a fighter's feet sit while hanging from `l`: just outside the wall, head poking above the lip. */
+export function hangPosition(f: FighterState, l: Ledge, rules: RulesConfig): { x: number; y: number } {
+  const s = fighterDef(f).stats;
+  return { x: l.x - l.dir * (s.width / 2 + 1), y: l.y + s.height - rules.ledge.hangHeadroom };
+}
+
+function isLedgeCorner(m: MatchState, p: Platform, dir: 1 | -1): boolean {
+  return stageLedges(m.stage, m.rules.ledge.wallClearance).some((l) => l.platformId === p.id && l.dir === dir);
+}
+
+function tryLedgeGrab(m: MatchState, f: FighterState, input: InputFrame): void {
+  const L = m.rules.ledge;
+  if (f.grounded || f.ledgeCooldown > 0 || input.down || f.ledgeGrabs >= L.maxGrabsPerAirtime) return;
+  // Only from free fall, or during a special (most recoveries are specials).
+  const recovering = f.action === 'attack' && f.move === 'special';
+  if (f.action !== 'air' && !recovering) return;
+  if (f.action === 'air' && f.vy + f.kby < 0) return; // on the way down only
+  const hw = fighterDef(f).stats.width / 2;
+  let best: Ledge | null = null;
+  let bestD = Infinity;
+  for (const l of stageLedges(m.stage, L.wallClearance)) {
+    const hang = hangPosition(f, l, m.rules);
+    const dx = Math.abs(f.x - hang.x);
+    const dy = f.y - hang.y; // > 0: below the hang position
+    if (dx > L.grabRangeX || dy < -L.grabAbove || dy > L.grabBelow) continue;
+    if ((f.x - l.x) * l.dir > hw * 0.5) continue; // over the stage, not beside the ledge
+    if (m.fighters.some((o) => o !== f && isOnLedge(o) && o.ledge?.x === l.x && o.ledge?.y === l.y)) continue;
+    const d = dx + Math.abs(dy);
+    if (d < bestD) {
+      bestD = d;
+      best = l;
+    }
+  }
+  if (best) grabLedge(m, f, best);
+}
+
+function grabLedge(m: MatchState, f: FighterState, l: Ledge): void {
+  const L = m.rules.ledge;
+  const move = currentMove(f);
+  if (f.action === 'attack' && move && f.move) f.cooldowns[f.move] = move.cooldown;
+  const hang = hangPosition(f, l, m.rules);
+  f.action = 'ledge';
+  f.actionFrame = 0;
+  f.move = null;
+  f.ledge = l;
+  f.x = hang.x;
+  f.y = hang.y;
+  f.vx = f.vy = f.kbx = f.kby = 0;
+  f.facing = l.dir;
+  f.grounded = false;
+  f.fastFalling = false;
+  f.jumpHeld = false;
+  f.buffer = null;
+  f.jumpBuffer = 0;
+  f.charge = 0;
+  f.ledgeGrabs++;
+  if (!f.ledgeInvulnUsed) {
+    // First grab this airtime: brief invulnerability and the double jump / recovery back.
+    f.ledgeInvulnUsed = true;
+    f.invuln = Math.max(f.invuln, L.invulnFrames);
+    f.jumpsUsed = Math.min(f.jumpsUsed, 1);
+    f.airUsed = [];
+    f.airBoostUsed = false;
+    f.airDodgesUsed = 0;
+  }
+  m.events.push({ type: 'ledgeGrab', id: f.id, x: l.x, y: l.y });
+}
+
+/** Training helper: hang `f` on `l` as a fresh first grab (with ledge invulnerability). */
+export function placeOnLedge(m: MatchState, f: FighterState, l: Ledge): void {
+  f.ledgeGrabs = 0;
+  f.ledgeInvulnUsed = false;
+  f.ledgeCooldown = 0;
+  f.hitstun = 0;
+  f.hitstop = 0;
+  if (f.action !== 'attack') f.move = null;
+  grabLedge(m, f, l);
+}
+
+function leaveLedge(m: MatchState, f: FighterState, kind: 'jump' | 'release'): void {
+  const L = m.rules.ledge;
+  const l = f.ledge!;
+  const s = fighterDef(f).stats;
+  f.ledge = null;
+  f.invuln = 0;
+  f.ledgeCooldown = L.regrabCooldownFrames;
+  f.action = 'air';
+  f.actionFrame = 0;
+  f.grounded = false;
+  if (kind === 'jump') {
+    f.vy = -s.jumpVelocity * L.jumpScale;
+    f.vx = l.dir * s.airSpeed * 0.3;
+    f.jumpsUsed = Math.max(f.jumpsUsed, 1);
+    f.jumpBuffer = 0;
+    f.jumpHeld = false; // always a full jump
+    m.events.push({ type: 'jump', id: f.id, double: false, x: f.x, y: f.y });
+  } else {
+    f.x -= l.dir * 2;
+    f.vy = 0;
+  }
+  m.events.push({ type: 'ledgeAction', id: f.id, kind });
+}
+
+function updateLedge(m: MatchState, f: FighterState, input: InputFrame, dir: number): void {
+  const L = m.rules.ledge;
+  const l = f.ledge;
+  if (!l) {
+    f.action = 'air';
+    return;
+  }
+  const s = fighterDef(f).stats;
+  const hang = hangPosition(f, l, m.rules);
+  f.vx = f.vy = f.kbx = f.kby = 0;
+  f.grounded = false;
+
+  if (f.action === 'ledge') {
+    f.x = hang.x;
+    f.y = hang.y;
+    f.actionFrame++;
+    if (f.actionFrame >= L.maxHangFrames) return leaveLedge(m, f, 'release');
+    if (f.actionFrame < L.actionDelayFrames) return;
+    if (f.jumpBuffer > 0) return leaveLedge(m, f, 'jump');
+    if (f.buffer?.action === 'dodge') {
+      f.buffer = null;
+      return startLedgeGetup(m, f, 'ledgeRoll');
+    }
+    f.buffer = null; // no ledge attacks
+    if (input.up || dir === l.dir) return startLedgeGetup(m, f, 'ledgeClimb');
+    if (input.down || dir === -l.dir) return leaveLedge(m, f, 'release');
+    return;
+  }
+
+  // Climb / roll: rise up the wall, then move onto the platform (never past its ends).
+  const roll = f.action === 'ledgeRoll';
+  const total = roll ? L.rollFrames : L.climbFrames;
+  f.actionFrame++;
+  const hw = s.width / 2;
+  const inside = (x: number) => clamp(x, l.minX + hw, l.maxX - hw);
+  const endX = inside(l.x + l.dir * (hw + (roll ? L.rollDistance : 6)));
+  const riseEnd = roll ? 0.35 : 0.55;
+  const t = Math.min(1, f.actionFrame / total);
+  const smooth = (u: number) => u * u * (3 - 2 * u);
+  if (t < riseEnd) {
+    f.x = hang.x;
+    f.y = lerp(hang.y, l.y, smooth(t / riseEnd));
+  } else {
+    f.x = lerp(hang.x, endX, smooth((t - riseEnd) / (1 - riseEnd)));
+    f.y = l.y;
+  }
+  if (f.actionFrame >= total) {
+    f.x = endX;
+    f.ledge = null;
+    f.action = 'idle';
+    f.actionFrame = 0;
+    land(m, f, l.y);
+  }
+}
+
+function startLedgeGetup(m: MatchState, f: FighterState, action: 'ledgeClimb' | 'ledgeRoll'): void {
+  f.action = action;
+  f.actionFrame = 0;
+  f.invuln = 0; // ledge invulnerability ends; the get-up has its own short intangibility
+  m.events.push({ type: 'ledgeAction', id: f.id, kind: action === 'ledgeRoll' ? 'roll' : 'climb' });
+}
+
+// ---------------------------------------------------------------------------
+// Shields
+// ---------------------------------------------------------------------------
+
+export function shieldMax(rules: RulesConfig, f: FighterState): number {
+  return fighterDef(f).stats.shieldMax ?? rules.shield.maxHealth;
+}
+
+function startShield(m: MatchState, f: FighterState): void {
+  if (f.shieldHp < 1) return;
+  f.action = 'shield';
+  f.actionFrame = 0;
+  f.shieldStun = 0;
+  m.events.push({ type: 'shield', id: f.id, up: true });
+}
+
+function regenShield(m: MatchState, f: FighterState): void {
+  if (f.action === 'shield' || f.action === 'shieldBreak') return;
+  if (f.shieldRegenDelay > 0) {
+    f.shieldRegenDelay--;
+    return;
+  }
+  f.shieldHp = Math.min(shieldMax(m.rules, f), f.shieldHp + m.rules.shield.regenPerSecond * DT);
+}
+
+function updateShield(m: MatchState, f: FighterState, input: InputFrame, dir: number): void {
+  const cfg = m.rules.shield;
+  f.actionFrame++;
+  f.shieldRegenDelay = cfg.regenDelayFrames;
+  f.shieldHp -= cfg.drainPerSecond * DT;
+  if (f.shieldHp <= 0) return breakShield(m, f);
+  if (f.shieldStun > 0) {
+    f.shieldStun--;
+    return;
+  }
+  // No attacking out of shield; jumping out of it is allowed.
+  if (f.buffer && f.buffer.action !== 'dodge') f.buffer = null;
+  if (f.jumpBuffer > 0) {
+    f.action = 'idle';
+    f.buffer = null;
+    m.events.push({ type: 'shield', id: f.id, up: false });
+    return;
+  }
+  const pressed = (k: keyof InputFrame) => input[k] && !f.prevInput[k];
+  const rollDir = pressed('left') || pressed('right') ? dir : 0;
+  if (f.dodgeCooldown <= 0 && (rollDir !== 0 || pressed('down'))) {
+    f.action = 'idle';
+    f.buffer = null;
+    m.events.push({ type: 'shield', id: f.id, up: false });
+    startDodge(m, f, input, rollDir);
+    return;
+  }
+  if (!input.dodge && f.actionFrame >= cfg.minFrames) {
+    f.action = 'shieldRelease';
+    f.actionFrame = cfg.releaseFrames;
+    m.events.push({ type: 'shield', id: f.id, up: false });
+  }
+}
+
+function applyShieldHit(m: MatchState, h: PendingHit): void {
+  const { attacker: att, victim: vic, move, values: v, direction: dir } = h;
+  const cfg = m.rules.shield;
+  const dmg = v.shieldDamage ?? v.damage * cfg.damageMultiplier + cfg.damageBase;
+  vic.shieldHp -= dmg;
+  vic.shieldStun = Math.min(cfg.stunMax, Math.max(1, Math.round(cfg.stunBase + v.damage * cfg.stunPerDamage)));
+  vic.vx = dir * (cfg.pushbackBase + v.damage * cfg.pushbackPerDamage);
+  const stop = hitstopFrames(v.damage, m.rules);
+  vic.hitstop = stop;
+  if (!h.projectile) att.hitstop = Math.max(att.hitstop, stop);
+  // Luigi's rocket still bounces off.
+  if (move?.stopOnHit && att.action === 'attack' && currentMove(att) === move) {
+    att.vx = -att.facing * m.rules.combat.reboundSpeedX;
+    att.vy = -m.rules.combat.reboundSpeedY;
+    att.grounded = false;
+    att.actionFrame = move.startup + move.active;
+  }
+  m.events.push({
+    type: 'shieldHit', attacker: att.id, victim: vic.id, x: h.x, y: h.y, shieldDamage: dmg, health: Math.max(0, vic.shieldHp),
+  });
+  if (vic.shieldHp <= 0) breakShield(m, vic);
+}
+
+function breakShield(m: MatchState, f: FighterState): void {
+  const cfg = m.rules.shield;
+  f.action = 'shieldBreak';
+  f.actionFrame = cfg.breakStunFrames;
+  f.shieldHp = 0;
+  f.shieldStun = 0;
+  f.vy = -cfg.breakLaunchSpeed;
+  f.vx = 0;
+  f.grounded = false;
+  f.buffer = null;
+  f.jumpBuffer = 0;
+  m.events.push({ type: 'shieldBreak', id: f.id, x: f.x, y: f.y });
 }

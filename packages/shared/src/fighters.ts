@@ -20,6 +20,8 @@ export interface FighterStats {
   jumpVelocity: number;
   doubleJumpVelocity: number;
   maxJumps: number;
+  /** Overrides rules.shield.maxHealth for this fighter. */
+  shieldMax?: number;
 }
 
 export interface HitboxDef {
@@ -51,11 +53,15 @@ export interface HitboxDef {
    * 'force' (Vader's choke) also holds them suspended in the air.
    */
   restrain?: RestrainKind;
+  /** Shield damage when blocked (defaults to the shield rules' formula from `damage`). */
+  shieldDamage?: number;
+  /** Ignores shields entirely (grab-like moves such as Force Choke; future grabs/throws). */
+  unblockable?: boolean;
 }
 
 /** The damage/launch part of a hitbox, used by projectiles (which carry their own size and position). */
 export type HitEffect = Pick<HitboxDef,
-  'damage' | 'baseKnockback' | 'knockbackGrowth' | 'angle' | 'hitstunMultiplier' | 'stunFrames' | 'restrain'>;
+  'damage' | 'baseKnockback' | 'knockbackGrowth' | 'angle' | 'hitstunMultiplier' | 'stunFrames' | 'restrain' | 'shieldDamage' | 'unblockable'>;
 
 /** Mr. Game & Watch's numbered special: rolls 1–9, each with its own outcome. */
 export interface JudgeBehavior {
@@ -862,7 +868,7 @@ const VADER: FighterDef = {
       cooldown: 150,
       hitboxes: [{
         x: 125, y: -55, w: 140, h: 100, damage: 6, baseKnockback: 40, knockbackGrowth: 0, angle: 90,
-        stunFrames: 50, restrain: 'force',
+        stunFrames: 50, restrain: 'force', unblockable: true,
       }],
     },
     aerial: {

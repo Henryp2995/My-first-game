@@ -168,3 +168,46 @@ export function solidSurfaceAt(stage: StageDef, x: number): number | null {
   }
   return top;
 }
+
+/** A grabbable corner of a solid platform. Plain data so it can live in serializable match state. */
+export interface Ledge {
+  /** Corner position (the lip). */
+  x: number;
+  y: number;
+  /** Direction from the ledge toward the stage: +1 for a left edge, -1 for a right edge. */
+  dir: 1 | -1;
+  /** Walkable extent of the ledge's platform (climbs and rolls stay inside it). */
+  minX: number;
+  maxX: number;
+  platformId: string;
+}
+
+const ledgeCache = new WeakMap<StageDef, Map<number, Ledge[]>>();
+
+/**
+ * Grabbable ledges derived from collision geometry — no per-stage coordinates. A solid corner
+ * counts only if the space just outside it is open for `clearance` px below the lip (so steps
+ * between adjoining platforms, like Corneria's deck → nose, are not ledges). One-way platforms
+ * are never grabbable.
+ */
+export function stageLedges(stage: StageDef, clearance = 120): Ledge[] {
+  let byClearance = ledgeCache.get(stage);
+  if (!byClearance) ledgeCache.set(stage, (byClearance = new Map()));
+  const cached = byClearance.get(clearance);
+  if (cached) return cached;
+  const solids = stage.platforms.filter((p) => !p.oneWay);
+  const blocked = (x: number, y0: number, y1: number) =>
+    solids.some((p) => x > p.x1 && x < p.x2 && p.y < y1 && p.y + p.height > y0);
+  const ledges: Ledge[] = [];
+  for (const p of solids) {
+    for (const [x, dir] of [[p.x1, 1], [p.x2, -1]] as [number, 1 | -1][]) {
+      const outside = x - dir * 2;
+      if (blocked(outside, p.y + 1, p.y + clearance)) continue;
+      // Something sitting right on the lip (a wall above) also makes it ungrabbable.
+      if (blocked(x + dir * 2, p.y - 40, p.y - 1)) continue;
+      ledges.push({ x, y: p.y, dir, minX: p.x1, maxX: p.x2, platformId: p.id });
+    }
+  }
+  byClearance.set(clearance, ledges);
+  return ledges;
+}

@@ -107,6 +107,10 @@ export class CpuController {
   private foeFree = 0;
   /** Frames to back off after a capped jab string. */
   private backOff = 0;
+  /** Countdown before acting on a ledge (-1 = not decided yet). */
+  private ledgeWait = -1;
+  /** Clock time of the last shield, so the CPU doesn't shield every single attack. */
+  private lastShield = -999;
 
   constructor(readonly id: number, readonly difficulty: CpuDifficulty = 'normal', seed = 0x5eed) {
     this.profile = CPU_PROFILES[difficulty];
@@ -169,7 +173,21 @@ export class CpuController {
       return out;
     }
 
-    // Continue a held button (full jump, rocket charge).
+    // On a ledge: wait a (difficulty-based) moment, then get up. Never just let go.
+    if (me.action === 'ledge') {
+      this.holding = null;
+      this.recovering = false;
+      this.ledgeGetup(m, me, foe, out);
+      this.flushPress(out);
+      return out;
+    }
+    this.ledgeWait = -1;
+    if (me.action === 'ledgeClimb' || me.action === 'ledgeRoll' || me.action === 'shieldBreak') {
+      this.holding = null;
+      return out;
+    }
+
+    // Continue a held button (full jump, rocket charge, shield).
     if (this.holding) {
       out[this.holding.button] = true;
       setDir(out, this.holding.dir);
@@ -270,6 +288,39 @@ export class CpuController {
     }
   }
 
+  private ledgeGetup(m: MatchState, me: FighterState, foe: Snapshot | null, out: InputFrame): void {
+    const l = me.ledge;
+    if (!l) return;
+    if (this.ledgeWait < 0) {
+      this.ledgeWait = m.rules.ledge.actionDelayFrames + this.profile.reactionFrames + Math.floor(nextRandom(this.rng) * 20);
+    }
+    if (--this.ledgeWait > 0) return;
+    this.ledgeWait = -1;
+    // A smart CPU avoids climbing straight into an opponent waiting at the edge.
+    const guarded = !!foe && foe.grounded && Math.abs(foe.x - l.x) < 150;
+    const r = nextRandom(this.rng);
+    const choice = guarded && this.profile.smart ? (r < 0.5 ? 'roll' : 'jump') : r < 0.6 ? 'climb' : r < 0.8 ? 'jump' : 'roll';
+    if (choice === 'climb') setDir(out, l.dir);
+    else this.press({ button: choice === 'jump' ? 'jump' : 'dodge', dir: 0, hold: choice === 'jump' ? 10 : undefined });
+  }
+
+  /**
+   * Defend against an incoming attack: hold shield for about as long as the attack lasts, or
+   * dodge (roll away / spot dodge / air dodge). Shield is skipped when it's low, so the CPU lets
+   * it regenerate instead of breaking it.
+   */
+  private defend(m: MatchState, me: FighterState, threatFrames: number, away: number): void {
+    const shieldOk = me.grounded && me.shieldHp > 35 && this.clock - this.lastShield > 40;
+    const dodgeOk = canDodge(m, me);
+    if (shieldOk && (!dodgeOk || this.chance(0.6))) {
+      this.lastShield = this.clock;
+      this.press({ button: 'dodge', dir: 0, hold: Math.max(6, Math.min(30, threatFrames)) });
+    } else if (dodgeOk) {
+      if (me.grounded) this.press({ button: 'dodge', dir: away, down: away === 0 });
+      else this.press({ button: 'dodge', dir: 0 });
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Neutral game
   // ---------------------------------------------------------------------------
@@ -283,7 +334,7 @@ export class CpuController {
     const actionable = me.action === 'idle' || me.action === 'run' || me.action === 'air';
 
     // React to an incoming attack.
-    if (actionable && foe.action === 'attack' && foe.move && canDodge(m, me)) {
+    if (actionable && foe.action === 'attack' && foe.move && (canDodge(m, me) || (me.grounded && me.shieldHp > 35))) {
       const key = `${foe.id}:${foe.move}:${Math.floor((this.clock - foe.actionFrame) / 4)}`;
       const move = FIGHTERS[foe.fighter].moves[foe.move];
       const facingMe = foe.facing === Math.sign(me.x - foe.x) || move.hitboxes.some((h) => h.autoDirection);
@@ -291,7 +342,7 @@ export class CpuController {
         this.dodgedKey = key;
         if (this.chance(prof.dodgeRate)) {
           const away = me.grounded && this.chance(0.5) && this.safeToMove(me, stage, -dirTo) ? -dirTo : 0;
-          this.press({ button: 'dodge', dir: away });
+          this.defend(m, me, move.startup - foe.actionFrame + move.active + 4, away);
           return;
         }
       }
@@ -454,7 +505,8 @@ export class CpuController {
       if (!approaching || !sameHeight || framesAway > 20 || framesAway < 2) continue;
       this.dodgedKey = key;
       if (!this.chance(this.profile.dodgeRate)) return false;
-      if (canDodge(m, me)) this.press({ button: 'dodge', dir: 0 });
+      if (me.grounded && me.shieldHp > 35 && this.chance(0.7)) this.defend(m, me, Math.ceil(framesAway) + 8, 0);
+      else if (canDodge(m, me)) this.press({ button: 'dodge', dir: 0, down: me.grounded });
       else if (me.grounded) this.press({ button: 'jump', dir: 0, hold: 10 }); // hop over it
       return true;
     }

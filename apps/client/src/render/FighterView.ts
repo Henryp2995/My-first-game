@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import {
-  FIGHTERS, currentMove, hurtboxRect, activeHitboxes, hitboxRect,
+  DEFAULT_RULES, FIGHTERS, currentMove, hurtboxRect, activeHitboxes, hitboxRect,
   type FighterState, type GameEvent,
 } from '@arena-rush/shared';
 import { AnimationController, type AnimFrame } from '../anim/controller';
@@ -33,6 +33,8 @@ export class FighterView {
   private judgeShow = 0;
   private judgeValue = 0;
   private trail: { x: number; y: number }[] = [];
+  /** Frames left of the white flash on the shield bubble after a blocked hit. */
+  private shieldFlash = 0;
 
   /**
    * @param tag text above the fighter ("P1", "CPU")
@@ -80,6 +82,8 @@ export class FighterView {
     if (e.type === 'hit' && e.victim === this.playerIndex) {
       this.flash = 8;
       this.shakeFrames = 10;
+    } else if (e.type === 'shieldHit' && e.victim === this.playerIndex) {
+      this.shieldFlash = 6;
     } else if (e.type === 'judge' && e.id === this.playerIndex) {
       this.judgeValue = e.value;
       this.judgeShow = 60;
@@ -92,6 +96,7 @@ export class FighterView {
     if (this.flash > 0) this.flash--;
     if (this.shakeFrames > 0) this.shakeFrames--;
     if (this.judgeShow > 0) this.judgeShow--;
+    if (this.shieldFlash > 0) this.shieldFlash--;
     this.frame = this.anim.update(f);
   }
 
@@ -155,6 +160,8 @@ export class FighterView {
 
     this.drawTrail(frame, res.weaponTip ?? res.handF);
     this.drawMoveEffects(f, res.handF, x, y);
+    this.drawShield(f, x, y);
+    if (f.action === 'shieldBreak') this.drawDizzy(res.top, x);
 
     // Player tag arrow
     const tagY = res.top - 8;
@@ -181,6 +188,46 @@ export class FighterView {
         fx.fillStyle(0xff0000, 0.35);
         fx.fillRect(r.x, r.y, r.w, r.h);
       }
+    }
+  }
+
+  /**
+   * Translucent shield bubble: shrinks with shield health, shifts from the player's color to red
+   * when low, and flashes white when it blocks a hit. Visual only — the sim decides what's blocked.
+   */
+  private drawShield(f: FighterState, x: number, y: number): void {
+    if (f.action !== 'shield') return;
+    const s = FIGHTERS[f.fighter].stats;
+    const max = s.shieldMax ?? DEFAULT_RULES.shield.maxHealth;
+    const ratio = Math.max(0, Math.min(1, f.shieldHp / max));
+    const r = s.height * 0.62 * (0.42 + 0.58 * ratio);
+    const cy = y - s.height * 0.5;
+    const low = ratio < 0.3;
+    const color = low ? (Math.floor(this.clock / 5) % 2 === 0 ? 0xff3b3b : 0xff9a3b) : ratio < 0.6 ? 0xffb347 : this.color;
+    const fx = this.fxG;
+    fx.fillStyle(color, 0.22 + (1 - ratio) * 0.12);
+    fx.fillCircle(x, cy, r);
+    fx.lineStyle(3, color, 0.85);
+    fx.strokeCircle(x, cy, r);
+    fx.fillStyle(0xffffff, 0.35);
+    fx.fillEllipse(x - r * 0.35, cy - r * 0.4, r * 0.5, r * 0.28);
+    if (this.shieldFlash > 0) {
+      fx.fillStyle(0xffffff, 0.12 * this.shieldFlash);
+      fx.fillCircle(x, cy, r + 2);
+    }
+  }
+
+  /** Stars circling the head during a shield-break stun. */
+  private drawDizzy(top: number, x: number): void {
+    const fx = this.fxG;
+    for (let i = 0; i < 3; i++) {
+      const a = this.clock * 0.12 + (i * Math.PI * 2) / 3;
+      const sx = x + Math.cos(a) * 22;
+      const sy = top - 4 + Math.sin(a) * 6;
+      fx.fillStyle(0xffe14d, 1);
+      fx.fillCircle(sx, sy, 4.5);
+      fx.fillStyle(0xffffff, 1);
+      fx.fillCircle(sx, sy, 2);
     }
   }
 

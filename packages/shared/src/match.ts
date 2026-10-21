@@ -8,7 +8,8 @@ import {
   type ProjectileBehavior, type ProjectileKind, type RestrainKind,
 } from './fighters';
 import { approach, clamp, lerp, rectsOverlap } from './geometry';
-import { emptyInput, type InputFrame } from './input';
+import { GRABS, type GrabDef, type ThrowDir } from './grabs';
+import { emptyInput, INPUT_KEYS, type InputFrame } from './input';
 import { nextRandom, randomInt } from './rng';
 import { SKYFALL_ARENA, stageLedges, type Ledge, type Platform, type StageDef } from './stage';
 
@@ -17,9 +18,11 @@ export type FighterAction =
   // Ledges: hanging, then climbing up or rolling onto the stage.
   | 'ledge' | 'ledgeClimb' | 'ledgeRoll'
   // Shields: held, the lag after dropping it, and the helpless stun after it breaks.
-  | 'shield' | 'shieldRelease' | 'shieldBreak';
+  | 'shield' | 'shieldRelease' | 'shieldBreak'
+  // Grabs: reaching, holding someone, being held, throwing, and the lag after a break-free.
+  | 'grab' | 'holding' | 'grabbed' | 'throw' | 'grabRelease';
 
-export type BufferedAction = 'light' | 'heavy' | 'special' | 'dodge';
+export type BufferedAction = 'light' | 'heavy' | 'special' | 'dodge' | 'grab';
 
 export interface FighterMatchStats {
   kos: number;
@@ -93,6 +96,15 @@ export interface FighterState {
   shieldRegenDelay: number;
   /** Frames the shield is locked up after blocking a hit. */
   shieldStun: number;
+  /** The fighter this one is holding / held by (null when not in a grab). */
+  grabPartner: number | null;
+  /** Grabbed fighters: frames left before breaking free. */
+  grabTimer: number;
+  pummelCooldown: number;
+  /** Frames this fighter can't be grabbed (just escaped or was thrown). */
+  grabImmune: number;
+  /** The throw in progress. */
+  throwDir: ThrowDir | null;
   prevInput: InputFrame;
   stats: FighterMatchStats;
 }
@@ -114,6 +126,8 @@ export type GameEvent =
     launchSpeed: number; launchX: number; launchY: number; hitstun: number; hitstop: number;
     /** Set when the hit came from a projectile. */
     projectile?: ProjectileKind;
+    /** Set when the hit is a throw. */
+    throwDir?: ThrowDir;
   }
   | { type: 'dodge'; id: number }
   | { type: 'ko'; id: number; x: number; y: number; by: number | null }
@@ -123,6 +137,13 @@ export type GameEvent =
   | { type: 'shield'; id: number; up: boolean }
   | { type: 'shieldHit'; attacker: number; victim: number; x: number; y: number; shieldDamage: number; health: number }
   | { type: 'shieldBreak'; id: number; x: number; y: number }
+  | { type: 'grabStart'; id: number }
+  | { type: 'grabWhiff'; id: number }
+  | { type: 'grab'; grabber: number; victim: number; x: number; y: number; shielded: boolean }
+  | { type: 'grabClash'; a: number; b: number; x: number; y: number }
+  | { type: 'pummel'; grabber: number; victim: number; damage: number; x: number; y: number }
+  | { type: 'throw'; grabber: number; victim: number; dir: ThrowDir; x: number; y: number }
+  | { type: 'grabEscape'; grabber: number; victim: number; x: number; y: number }
   | { type: 'eliminated'; id: number }
   | { type: 'matchEnd'; winner: number | null; reason: 'stocks' | 'time' };
 
@@ -233,6 +254,11 @@ export function createFighter(id: number, fighter: FighterId, stage: StageDef, s
     shieldHp: FIGHTERS[fighter].stats.shieldMax ?? rules.shield.maxHealth,
     shieldRegenDelay: 0,
     shieldStun: 0,
+    grabPartner: null,
+    grabTimer: 0,
+    pummelCooldown: 0,
+    grabImmune: 0,
+    throwDir: null,
     prevInput: emptyInput(),
     stats: { kos: 0, falls: 0, damageDealt: 0, damageTaken: 0 },
   };
@@ -334,8 +360,11 @@ export function stepMatch(m: MatchState, inputs: InputFrame[]): GameEvent[] {
   for (let i = 0; i < m.fighters.length; i++) {
     updateFighter(m, m.fighters[i], inputs[i] ?? emptyInput());
   }
+  syncGrabs(m);
   updateProjectiles(m);
   resolveHits(m);
+  resolveGrabs(m);
+  syncGrabs(m);
   for (const f of m.fighters) {
     checkBlastZone(m, f);
     f.freeFrames = f.action === 'hitstun' || f.hitstop > 0 ? 0 : f.freeFrames + 1;
@@ -362,6 +391,7 @@ function updateBuffers(m: MatchState, f: FighterState, input: InputFrame): void 
   if (pressed('special')) f.buffer = { action: 'special', frames };
   else if (pressed('heavy')) f.buffer = { action: 'heavy', frames };
   else if (pressed('light')) f.buffer = { action: 'light', frames };
+  else if (pressed('grab')) f.buffer = { action: 'grab', frames };
   else if (pressed('dodge')) f.buffer = { action: 'dodge', frames };
   else if (f.buffer && --f.buffer.frames <= 0) f.buffer = null;
 }
@@ -383,6 +413,7 @@ function updateFighter(m: MatchState, f: FighterState, input: InputFrame): void 
   if (f.dodgeCooldown > 0) f.dodgeCooldown--;
   if (f.dropThrough > 0) f.dropThrough--;
   if (f.ledgeCooldown > 0) f.ledgeCooldown--;
+  if (f.grabImmune > 0) f.grabImmune--;
   regenShield(m, f);
   if (!f.grounded && f.coyote > 0) f.coyote--;
   for (const k of Object.keys(f.cooldowns) as MoveSlot[]) if (f.cooldowns[k] > 0) f.cooldowns[k]--;
@@ -408,6 +439,13 @@ function updateFighter(m: MatchState, f: FighterState, input: InputFrame): void 
     }
   }
 
+  if (f.action === 'grabbed') {
+    // Held: position is set by the grabber (syncGrabs); all this fighter can do is mash free.
+    updateGrabbed(m, f, input);
+    f.prevInput = { ...input };
+    return;
+  }
+
   if (f.action === 'ledge' || f.action === 'ledgeClimb' || f.action === 'ledgeRoll') {
     // Hanging and ledge get-ups are fully scripted: no gravity, no free movement.
     updateLedge(m, f, input, dir);
@@ -423,7 +461,17 @@ function updateFighter(m: MatchState, f: FighterState, input: InputFrame): void 
       updateShield(m, f, input, dir);
       break;
     case 'shieldRelease':
+    case 'grabRelease':
       if (--f.actionFrame <= 0) f.action = f.grounded ? 'idle' : 'air';
+      break;
+    case 'grab':
+      updateGrabAttempt(m, f);
+      break;
+    case 'holding':
+      updateHolding(m, f, input, dir);
+      break;
+    case 'throw':
+      updateThrow(m, f);
       break;
     case 'shieldBreak':
       if (--f.actionFrame <= 0) {
@@ -476,6 +524,13 @@ function tryActions(m: MatchState, f: FighterState, input: InputFrame, dir: numb
         f.buffer = null;
         return;
       }
+    }
+  } else if (f.buffer?.action === 'grab') {
+    // Grabs are ground-only; a grab pressed in the air just expires from the buffer.
+    if (f.grounded) {
+      startGrab(m, f);
+      f.buffer = null;
+      return;
     }
   } else if (f.buffer) {
     let slot: MoveSlot = f.buffer.action as MoveSlot;
@@ -697,7 +752,10 @@ function physics(m: MatchState, f: FighterState, input: InputFrame, dir: number)
     const rolling = f.actionFrame < m.rules.dodge.invulnFrames;
     if (f.grounded) f.vx = approach(f.vx, 0, (rolling ? mv.rollFriction : mv.dodgeEndFriction) * s.groundFriction * DT);
     else f.vx = approach(f.vx, 0, s.airFriction * mv.dodgeEndFriction * DT);
-  } else if (f.action === 'shield' || f.action === 'shieldRelease' || f.action === 'shieldBreak') {
+  } else if (
+    f.action === 'shield' || f.action === 'shieldRelease' || f.action === 'shieldBreak' ||
+    f.action === 'grab' || f.action === 'holding' || f.action === 'throw' || f.action === 'grabRelease'
+  ) {
     // Shielding roots you in place; blocked hits slide you back. A broken shield is helpless.
     f.vx = approach(f.vx, 0, (f.grounded ? s.groundFriction : s.airFriction) * DT);
   } else if (f.action === 'attack' || f.action === 'landing') {
@@ -909,6 +967,7 @@ interface PendingHit {
   y: number;
   /** Projectile hits don't freeze the (distant) attacker. */
   projectile: ProjectileState | null;
+  throwDir?: ThrowDir;
 }
 
 function resolveHits(m: MatchState): void {
@@ -1096,6 +1155,8 @@ function applyHit(m: MatchState, h: PendingHit): void {
     applyShieldHit(m, h);
     return;
   }
+  // Getting hit while holding someone (or while held by someone else) breaks the grab.
+  if (vic.grabPartner !== null && !(h.throwDir && h.attacker.id === vic.grabPartner)) breakGrab(m, vic);
   // A hit ends a shield break (and restores enough shield), and knocks fighters off ledges.
   if (vic.action === 'shieldBreak') vic.shieldHp = Math.max(vic.shieldHp, m.rules.shield.breakRecoverHealth);
   vic.shieldStun = 0;
@@ -1154,6 +1215,7 @@ function applyHit(m: MatchState, h: PendingHit): void {
     type: 'hit', attacker: att.id, victim: vic.id, damage: v.damage, x: h.x, y: h.y,
     launchSpeed: speed, launchX: launch.x, launchY: launch.y, hitstun: vic.hitstun, hitstop: stop,
     ...(h.projectile ? { projectile: h.projectile.kind } : {}),
+    ...(h.throwDir ? { throwDir: h.throwDir } : {}),
   });
 }
 
@@ -1180,6 +1242,7 @@ export function koFighter(m: MatchState, f: FighterState): void {
   if (f.lastHitBy !== null && f.lastHitBy !== f.id) m.fighters[f.lastHitBy].stats.kos++;
   f.stats.falls++;
   if (!m.rules.infiniteStocks) f.stocks = Math.max(0, f.stocks - 1);
+  breakGrab(m, f);
   f.action = 'dead';
   f.move = null;
   f.ledge = null;
@@ -1219,6 +1282,10 @@ function respawn(m: MatchState, f: FighterState): void {
   f.shieldHp = shieldMax(m.rules, f);
   f.shieldRegenDelay = 0;
   f.shieldStun = 0;
+  f.grabPartner = null;
+  f.grabTimer = 0;
+  f.grabImmune = 0;
+  f.throwDir = null;
   f.action = 'respawning';
   f.respawnTimer = m.rules.respawnHoverFrames;
   f.facing = point.x <= 0 ? 1 : -1;
@@ -1453,6 +1520,13 @@ function updateShield(m: MatchState, f: FighterState, input: InputFrame, dir: nu
     f.shieldStun--;
     return;
   }
+  // Grab out of shield is allowed (drop the shield and grab).
+  if (f.buffer?.action === 'grab') {
+    f.buffer = null;
+    m.events.push({ type: 'shield', id: f.id, up: false });
+    startGrab(m, f);
+    return;
+  }
   // No attacking out of shield; jumping out of it is allowed.
   if (f.buffer && f.buffer.action !== 'dodge') f.buffer = null;
   if (f.jumpBuffer > 0) {
@@ -1512,4 +1586,279 @@ function breakShield(m: MatchState, f: FighterState): void {
   f.buffer = null;
   f.jumpBuffer = 0;
   m.events.push({ type: 'shieldBreak', id: f.id, x: f.x, y: f.y });
+}
+
+// ---------------------------------------------------------------------------
+// Grabs, pummels & throws
+// ---------------------------------------------------------------------------
+
+export function grabDef(f: FighterState): GrabDef {
+  return GRABS[f.fighter];
+}
+
+/** Holding / held / throwing someone. */
+export function inGrab(f: FighterState): boolean {
+  return f.grabPartner !== null;
+}
+
+function startGrab(m: MatchState, f: FighterState): void {
+  f.action = 'grab';
+  f.actionFrame = 0;
+  f.move = null;
+  f.grabPartner = null;
+  m.events.push({ type: 'grabStart', id: f.id });
+}
+
+/** The grab box while the grab is active (null otherwise). */
+export function activeGrabBox(f: FighterState): { x: number; y: number; w: number; h: number } | null {
+  if (f.action !== 'grab' || f.grabPartner !== null) return null;
+  const d = grabDef(f);
+  if (f.actionFrame < d.startup || f.actionFrame >= d.startup + d.active) return null;
+  return hitboxRect(f, { ...d.box, damage: 0, baseKnockback: 0, knockbackGrowth: 0, angle: 0 });
+}
+
+function updateGrabAttempt(m: MatchState, f: FighterState): void {
+  const d = grabDef(f);
+  f.actionFrame++;
+  if (f.actionFrame === d.startup + d.active) m.events.push({ type: 'grabWhiff', id: f.id });
+  if (f.actionFrame >= d.startup + d.active + d.recovery) f.action = f.grounded ? 'idle' : 'air';
+}
+
+const GRABBABLE: ReadonlySet<FighterAction> = new Set<FighterAction>([
+  'idle', 'run', 'landing', 'attack', 'shield', 'shieldRelease', 'shieldBreak', 'dodge', 'hitstun', 'grab',
+]);
+
+/**
+ * Who can be grabbed: grounded fighters in ordinary states — shielding included (grabs beat
+ * shields) — but never intangible ones, hanging/air states, or anyone already in a grab.
+ */
+export function canBeGrabbed(m: MatchState, v: FighterState): boolean {
+  return v.grounded && !v.eliminated && v.grabPartner === null && v.grabImmune === 0 &&
+    GRABBABLE.has(v.action) && !isIntangible(v, m.rules);
+}
+
+function resolveGrabs(m: MatchState): void {
+  const pending: { g: FighterState; v: FighterState }[] = [];
+  for (const g of m.fighters) {
+    if (g.hitstop > 0) continue;
+    const box = activeGrabBox(g);
+    if (!box) continue;
+    let best: FighterState | null = null;
+    for (const v of m.fighters) {
+      if (v === g || !canBeGrabbed(m, v)) continue;
+      if (!rectsOverlap(box, hurtboxRect(v, fighterDef(v).stats))) continue;
+      if (!best || Math.abs(v.x - g.x) < Math.abs(best.x - g.x)) best = v;
+    }
+    if (best) pending.push({ g, v: best });
+  }
+  for (const { g, v } of pending) {
+    if (g.action !== 'grab' || v.grabPartner !== null || g.grabPartner !== null) continue;
+    // Both grabbed each other on the same frame: bounce apart.
+    if (pending.some((p) => p.g === v && p.v === g)) {
+      if (v.action !== 'grab') continue;
+      for (const [a, b] of [[g, v], [v, g]] as const) {
+        a.action = 'grabRelease';
+        a.actionFrame = m.rules.grab.victimReleaseFrames;
+        a.vx = (a.x < b.x ? -1 : 1) * m.rules.grab.releaseSpeed;
+      }
+      m.events.push({ type: 'grabClash', a: g.id, b: v.id, x: (g.x + v.x) / 2, y: g.y - 40 });
+      continue;
+    }
+    connectGrab(m, g, v);
+  }
+}
+
+function connectGrab(m: MatchState, g: FighterState, v: FighterState): void {
+  const cfg = m.rules.grab;
+  const shielded = v.action === 'shield' || v.action === 'shieldRelease';
+  const vMove = currentMove(v);
+  if (v.action === 'attack' && vMove && v.move) v.cooldowns[v.move] = vMove.cooldown;
+  v.action = 'grabbed';
+  v.actionFrame = 0;
+  v.move = null;
+  v.grabPartner = g.id;
+  v.vx = v.vy = v.kbx = v.kby = 0;
+  v.hitstun = 0;
+  v.restrained = 0;
+  v.restrainKind = null;
+  v.shieldStun = 0;
+  v.buffer = null;
+  v.jumpBuffer = 0;
+  v.charge = 0;
+  v.facing = (-g.facing) as 1 | -1;
+  v.grabTimer = Math.min(cfg.holdMaxFrames, cfg.holdBaseFrames + v.damage * cfg.holdPerDamage);
+  g.action = 'holding';
+  g.actionFrame = 0;
+  g.grabPartner = v.id;
+  g.vx = 0;
+  g.pummelCooldown = 0;
+  g.buffer = null;
+  holdPosition(m, g, v);
+  m.events.push({ type: 'grab', grabber: g.id, victim: v.id, x: v.x, y: v.y - fighterDef(v).stats.height * 0.5, shielded });
+}
+
+/** The held fighter stands just in front of the grabber, on the same ground. */
+function holdPosition(m: MatchState, g: FighterState, v: FighterState): void {
+  const gap = fighterDef(g).stats.width / 2 + fighterDef(v).stats.width / 2 + m.rules.grab.holdGap;
+  v.x = g.x + g.facing * gap;
+  v.y = g.y;
+  v.grounded = g.grounded;
+  v.vx = v.vy = v.kbx = v.kby = 0;
+}
+
+/** Keeps grab pairs consistent and positioned; frees anyone whose partner is gone. */
+function syncGrabs(m: MatchState): void {
+  for (const f of m.fighters) {
+    if (f.grabPartner === null) {
+      if (f.action === 'grabbed' || f.action === 'holding') freeFromGrab(m, f);
+      continue;
+    }
+    const p = m.fighters[f.grabPartner];
+    const holder = f.action === 'holding' || f.action === 'throw';
+    const valid = !!p && !p.eliminated && p.grabPartner === f.id &&
+      (holder ? p.action === 'grabbed' : f.action === 'grabbed' && (p.action === 'holding' || p.action === 'throw'));
+    if (!valid || (holder && !f.grounded)) {
+      breakGrab(m, f);
+      continue;
+    }
+    if (holder) holdPosition(m, f, p);
+  }
+}
+
+/** Ends a grab from either side (hit, KO, lost footing). Both fighters get their normal states back. */
+function breakGrab(m: MatchState, f: FighterState): void {
+  const id = f.grabPartner;
+  f.grabPartner = null;
+  freeFromGrab(m, f);
+  if (id === null) return;
+  const p = m.fighters[id];
+  if (p && p.grabPartner === f.id) {
+    p.grabPartner = null;
+    freeFromGrab(m, p);
+  }
+}
+
+function freeFromGrab(m: MatchState, f: FighterState): void {
+  f.grabTimer = 0;
+  if (f.action === 'grabbed') {
+    f.action = 'grabRelease';
+    f.actionFrame = m.rules.grab.victimReleaseFrames;
+    f.grabImmune = m.rules.grab.regrabImmuneFrames;
+  } else if (f.action === 'holding' || f.action === 'throw') {
+    f.action = 'grabRelease';
+    f.actionFrame = m.rules.grab.grabberReleaseFrames;
+    f.throwDir = null;
+  }
+}
+
+function updateHolding(m: MatchState, g: FighterState, input: InputFrame, dir: number): void {
+  const cfg = m.rules.grab;
+  g.actionFrame++;
+  g.buffer = null;
+  g.jumpBuffer = 0;
+  if (g.pummelCooldown > 0) g.pummelCooldown--;
+  const v = g.grabPartner !== null ? m.fighters[g.grabPartner] : null;
+  if (!v || v.action !== 'grabbed') return breakGrab(m, g);
+  // Safety net: nobody is held forever even if the victim's timer were frozen.
+  if (g.actionFrame > cfg.holdMaxFrames + 60) return escapeGrab(m, g, v);
+  if (g.actionFrame < cfg.holdInputDelay) return;
+  const throwDir: ThrowDir | null = input.up ? 'up' : input.down ? 'down'
+    : dir === g.facing ? 'forward' : dir === -g.facing ? 'back' : null;
+  if (throwDir) return startThrow(g, throwDir);
+  const pressed = (k: keyof InputFrame) => input[k] && !g.prevInput[k];
+  if ((pressed('grab') || pressed('light')) && g.pummelCooldown === 0) pummel(m, g, v);
+}
+
+function pummel(m: MatchState, g: FighterState, v: FighterState): void {
+  const cfg = m.rules.grab;
+  const dmg = grabDef(g).pummelDamage;
+  v.damage = Math.min(m.rules.combat.maxDamage, v.damage + dmg);
+  g.stats.damageDealt += dmg;
+  v.stats.damageTaken += dmg;
+  v.hitstop = cfg.pummelHitstop;
+  g.hitstop = cfg.pummelHitstop;
+  v.grabTimer -= cfg.pummelTimeCost;
+  g.pummelCooldown = cfg.pummelCooldownFrames;
+  m.events.push({ type: 'pummel', grabber: g.id, victim: v.id, damage: dmg, x: v.x, y: v.y - fighterDef(v).stats.height * 0.55 });
+  if (v.grabTimer <= 0) escapeGrab(m, g, v);
+}
+
+/** Every fresh press of any button counts as a mash (held keys and auto-repeat don't). */
+const MASH_KEYS: readonly (keyof InputFrame)[] = INPUT_KEYS;
+
+function updateGrabbed(m: MatchState, v: FighterState, input: InputFrame): void {
+  v.actionFrame++;
+  v.buffer = null;
+  v.jumpBuffer = 0;
+  const g = v.grabPartner !== null ? m.fighters[v.grabPartner] : null;
+  if (!g || (g.action !== 'holding' && g.action !== 'throw')) return breakGrab(m, v);
+  if (g.action === 'throw') return; // too late to escape once the throw has started
+  v.grabTimer--;
+  if (MASH_KEYS.some((k) => input[k] && !v.prevInput[k])) v.grabTimer -= m.rules.grab.mashFrames;
+  if (v.grabTimer <= 0) escapeGrab(m, g, v);
+}
+
+/** The held fighter breaks free: both are pushed apart and the escaper recovers first. */
+function escapeGrab(m: MatchState, g: FighterState, v: FighterState): void {
+  const cfg = m.rules.grab;
+  g.grabPartner = null;
+  v.grabPartner = null;
+  g.action = 'grabRelease';
+  g.actionFrame = cfg.grabberReleaseFrames;
+  g.vx = -g.facing * cfg.releaseSpeed * 0.6;
+  v.action = 'grabRelease';
+  v.actionFrame = cfg.victimReleaseFrames;
+  v.vx = g.facing * cfg.releaseSpeed;
+  v.grabTimer = 0;
+  v.grabImmune = cfg.regrabImmuneFrames;
+  m.events.push({ type: 'grabEscape', grabber: g.id, victim: v.id, x: (g.x + v.x) / 2, y: v.y - fighterDef(v).stats.height * 0.5 });
+}
+
+function startThrow(g: FighterState, dir: ThrowDir): void {
+  g.action = 'throw';
+  g.actionFrame = 0;
+  g.throwDir = dir;
+}
+
+function updateThrow(m: MatchState, g: FighterState): void {
+  const dir = g.throwDir;
+  if (!dir) {
+    g.action = g.grounded ? 'idle' : 'air';
+    return;
+  }
+  const t = grabDef(g).throws[dir];
+  g.actionFrame++;
+  if (g.actionFrame === t.releaseFrame) releaseThrow(m, g, dir);
+  if (g.actionFrame >= t.totalFrames) {
+    g.action = g.grounded ? 'idle' : 'air';
+    g.throwDir = null;
+  }
+}
+
+/** Launch the held fighter from where they are, through the normal hit pipeline (damage, weight, knockback, hitstun). */
+function releaseThrow(m: MatchState, g: FighterState, dir: ThrowDir): void {
+  const v = g.grabPartner !== null ? m.fighters[g.grabPartner] : null;
+  if (!v || v.action !== 'grabbed') return breakGrab(m, g);
+  const t = grabDef(g).throws[dir];
+  g.grabPartner = null;
+  v.grabPartner = null;
+  v.grabImmune = m.rules.grab.regrabImmuneFrames;
+  v.grabTimer = 0;
+  v.action = v.grounded ? 'idle' : 'air';
+  const h = fighterDef(v).stats.height;
+  m.events.push({ type: 'throw', grabber: g.id, victim: v.id, dir, x: v.x, y: v.y - h * 0.5 });
+  applyHit(m, {
+    attacker: g,
+    victim: v,
+    move: null,
+    values: {
+      damage: t.damage, baseKnockback: t.baseKnockback, knockbackGrowth: t.knockbackGrowth, angle: t.angle,
+      hitstunMultiplier: t.hitstunMultiplier ?? 1, unblockable: true,
+    },
+    direction: dir === 'back' ? (-g.facing as 1 | -1) : g.facing,
+    x: v.x,
+    y: v.y - h * 0.5,
+    projectile: null,
+    throwDir: dir,
+  });
 }

@@ -57,6 +57,29 @@ export interface RulesConfig {
     /** Ledge jump = this × the fighter's ground jump. */
     jumpScale: number;
   };
+  /** Grabs (per-fighter timing, reach and throws live in grabs.ts). */
+  grab: {
+    /** Hold time before a grabbed fighter breaks free = base + damage × perDamage, capped at max. */
+    holdBaseFrames: number;
+    holdPerDamage: number;
+    holdMaxFrames: number;
+    /** Each fresh button press while grabbed takes this many frames off the hold. */
+    mashFrames: number;
+    /** Throw/pummel inputs are ignored for the first frames of a hold. */
+    holdInputDelay: number;
+    pummelCooldownFrames: number;
+    /** Each pummel also takes this many frames off the hold (more pummels = sooner escape). */
+    pummelTimeCost: number;
+    pummelHitstop: number;
+    /** After an escape (or a grab clash): lag for each side and the push apart. */
+    grabberReleaseFrames: number;
+    victimReleaseFrames: number;
+    releaseSpeed: number;
+    /** A fighter who was just released or thrown can't be grabbed again for this long. */
+    regrabImmuneFrames: number;
+    /** Gap between the grabber and the held fighter's bodies. */
+    holdGap: number;
+  };
   /** Shields (hold the dodge button on the ground). */
   shield: {
     /** Default max shield health (fighters may override with stats.shieldMax). */
@@ -192,6 +215,21 @@ export const DEFAULT_RULES: RulesConfig = {
     rollDistance: 120,
     jumpScale: 1.05,
   },
+  grab: {
+    holdBaseFrames: 80,
+    holdPerDamage: 0.5,
+    holdMaxFrames: 160,
+    mashFrames: 6,
+    holdInputDelay: 6,
+    pummelCooldownFrames: 18,
+    pummelTimeCost: 14,
+    pummelHitstop: 4,
+    grabberReleaseFrames: 18,
+    victimReleaseFrames: 10,
+    releaseSpeed: 280,
+    regrabImmuneFrames: 50,
+    holdGap: 4,
+  },
   shield: {
     maxHealth: 100,
     drainPerSecond: 8,
@@ -265,7 +303,8 @@ export const DEFAULT_RULES: RulesConfig = {
 };
 
 /** Partial overrides, nested one level deep (e.g. `{ combat: { hitstopMax: 6 } }`). */
-export type RulesOverrides = Partial<Omit<RulesConfig, 'dodge' | 'movement' | 'combat' | 'ledge' | 'shield'>> & {
+export type RulesOverrides = Partial<Omit<RulesConfig, 'dodge' | 'movement' | 'combat' | 'ledge' | 'shield' | 'grab'>> & {
+  grab?: Partial<RulesConfig['grab']>;
   dodge?: Partial<RulesConfig['dodge']>;
   ledge?: Partial<RulesConfig['ledge']>;
   shield?: Partial<RulesConfig['shield']>;
@@ -285,6 +324,7 @@ export function makeRules(overrides: RulesOverrides = {}): RulesConfig {
     dodge: { ...DEFAULT_RULES.dodge, ...(overrides.dodge ?? {}) },
     ledge: { ...DEFAULT_RULES.ledge, ...(overrides.ledge ?? {}) },
     shield: { ...DEFAULT_RULES.shield, ...(overrides.shield ?? {}) },
+    grab: { ...DEFAULT_RULES.grab, ...(overrides.grab ?? {}) },
     movement: { ...DEFAULT_RULES.movement, ...(overrides.movement ?? {}) },
     combat,
   };

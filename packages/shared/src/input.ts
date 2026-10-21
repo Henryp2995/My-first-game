@@ -12,16 +12,18 @@ export interface InputFrame {
   heavy: boolean;
   special: boolean;
   dodge: boolean;
+  /** Grab (also pummels while holding someone). */
+  grab: boolean;
 }
 
 export const INPUT_KEYS: readonly (keyof InputFrame)[] = [
-  'left', 'right', 'up', 'down', 'jump', 'light', 'heavy', 'special', 'dodge',
+  'left', 'right', 'up', 'down', 'jump', 'light', 'heavy', 'special', 'dodge', 'grab',
 ];
 
 export function emptyInput(): InputFrame {
   return {
     left: false, right: false, up: false, down: false, jump: false,
-    light: false, heavy: false, special: false, dodge: false,
+    light: false, heavy: false, special: false, dodge: false, grab: false,
   };
 }
 
@@ -29,7 +31,7 @@ export function makeInput(partial: Partial<InputFrame> = {}): InputFrame {
   return { ...emptyInput(), ...partial };
 }
 
-/** Packs an input frame into a 9-bit integer (handy for networking later). */
+/** Packs an input frame into a 10-bit integer (handy for networking later). */
 export function encodeInput(input: InputFrame): number {
   let bits = 0;
   INPUT_KEYS.forEach((k, i) => { if (input[k]) bits |= 1 << i; });

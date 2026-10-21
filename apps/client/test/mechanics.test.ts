@@ -86,3 +86,50 @@ describe('training: shield & ledge practice', () => {
     expect(d.damage).toBe(0);
   });
 });
+
+describe('grab & throw client layer', () => {
+  it('maps grab actions to animation states and has poses for each throw direction', async () => {
+    const { throwPose } = await import('../src/anim/controller');
+    expect(simState(inputs('grab', { grounded: true }))).toBe('grab');
+    expect(simState(inputs('holding', { grounded: true }))).toBe('hold');
+    expect(simState(inputs('grabbed', { grounded: true }))).toBe('grabbed');
+    expect(simState(inputs('throw', { grounded: true }))).toBe('throw');
+    expect(simState(inputs('grabRelease', { grounded: true }))).toBe('land');
+    for (const dir of ['forward', 'back', 'up', 'down'] as const) {
+      for (const u of [0, 0.5, 1]) {
+        const p = throwPose(dir, u);
+        for (const v of [p.lean ?? 0, ...(p.armF ?? [0, 0]), ...(p.armB ?? [0, 0])]) expect(Number.isFinite(v)).toBe(true);
+      }
+    }
+    for (const s of ['grab', 'hold', 'grabbed', 'throw'] as const) {
+      expect(ANIM_STATES).toContain(s);
+      expect(SPRITE_FALLBACKS[s]?.length).toBeGreaterThan(0);
+      expect(sampleStateFrame('vader', s, 10).state).toBe(s);
+    }
+  });
+
+  it('binds grab to J for player 1 without clashing with other controls', async () => {
+    const { P1_KEYS } = await import('../src/input/keyboard');
+    expect(P1_KEYS.grab).toEqual(['KeyJ']);
+    const all = Object.entries(P1_KEYS).filter(([k]) => k !== 'up' && k !== 'jump').flatMap(([, v]) => v);
+    expect(new Set(all).size).toBe(all.length);
+  });
+
+  it('records throw damage and launch for the training HUD, and exposes dummy throw/escape settings', () => {
+    const s = new TrainingSession(createMatch([{ fighter: 'luigi' }, { fighter: 'luigi' }], { rules: TRAINING_RULES, stage: getStage('final') }), 0, 1);
+    const [p, d] = s.match.fighters;
+    p.x = d.x - 50;
+    p.facing = 1;
+    for (let i = 0; i < 20; i++) s.step(makeInput({ grab: i === 0 }));
+    expect(d.action).toBe('grabbed');
+    for (let i = 0; i < 30; i++) s.step(makeInput({ up: true }));
+    expect(s.lastThrow).toMatchObject({ by: 'You', dir: 'up' });
+    expect(s.lastThrow!.launch).toBeGreaterThan(0);
+    expect(s.recent).toContain('GRAB');
+    expect(s.recent).toContain('UP THROW');
+    expect(s.dummyThrow).toBe('forward');
+    expect(s.cycleDummyThrow(1)).toBe('back');
+    expect(s.dummyEscapeMash).toBe(false);
+    expect(s.toggleDummyEscape()).toBe(true);
+  });
+});

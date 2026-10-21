@@ -70,6 +70,8 @@ export interface KeyBindings {
   heavy: string[];
   special: string[];
   dodge: string[];
+  /** Grab; while holding someone it pummels (so does light attack). */
+  grab: string[];
 }
 
 /** Player 1's keyboard controls. (Local play is Player vs CPU, so there is only one keyboard player.) */
@@ -83,6 +85,7 @@ export const P1_KEYS: KeyBindings = {
   heavy: ['KeyG'],
   special: ['KeyH'],
   dodge: ['ShiftLeft'],
+  grab: ['KeyJ'],
 };
 
 export class KeyboardInputSource implements InputSource {

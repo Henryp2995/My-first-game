@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import {
-  createMatch, DUMMY_BEHAVIOR_LABEL, emptyInput, FIGHTERS, getStage, shieldMax, standings, stepMatch, TRAINING_RULES,
+  createMatch, DUMMY_BEHAVIOR_LABEL, emptyInput, FIGHTERS, getStage, GRABS, shieldMax, standings, stepMatch, TRAINING_RULES,
+  type GrabStyle,
   type FighterState, type GameEvent, type MatchState, type StageCamera,
 } from '@arena-rush/shared';
 import { music } from '../audio/music';
@@ -22,6 +23,13 @@ import { bodyText, displayText, installGlobalKeys, openOptionsPanel, panel, toas
 import { isAltCostume, isTraining, slotColor, slotCss, slotDescription, slotLabel, type MatchSetup, type MatchSummary } from './types';
 
 const STEP_MS = 1000 / 60;
+
+/** Effect color per grab style (character throw identity). */
+const GRAB_COLORS: Record<GrabStyle, number> = {
+  flat: 0x222222, comedic: 0x3fbf5f, ninja: 0x7ef9ff, web: 0xffffff, martial: 0xffe9a8,
+  clone: 0xff9a3b, ki: 0xffe066, mech: 0xff5fd2, force: 0xb36bff,
+};
+const THROW_SHORT: Record<string, string> = { forward: 'F-throw', back: 'B-throw', up: 'U-throw', down: 'D-throw' };
 
 interface HudCard {
   container: Phaser.GameObjects.Container;
@@ -65,7 +73,7 @@ export class BattleScene extends Phaser.Scene {
   private trainingPanel: OptionsPanel | null = null;
   private trainingHud: {
     combo: Phaser.GameObjects.Text; detail: Phaser.GameObjects.Text; dummy: Phaser.GameObjects.Text;
-    shield: Phaser.GameObjects.Text; recent: Phaser.GameObjects.Text;
+    shield: Phaser.GameObjects.Text; throwInfo: Phaser.GameObjects.Text; recent: Phaser.GameObjects.Text;
   } | null = null;
   private comboWasActive = false;
   /** HUD portraits and off-screen bubbles, drawn with the same renderer as the match. */
@@ -165,7 +173,7 @@ export class BattleScene extends Phaser.Scene {
 
     add(panel(this, GAME_WIDTH / 2, 38, 150, 56, UI.ink, 0xffffff, 0.85, 14));
     this.timerText = add(displayText(this, GAME_WIDTH / 2, 38, this.training ? 'TRAINING' : '5:00', this.training ? 20 : 32, this.training ? '#7ef9a0' : '#ffffff', UI.inkCss, 0));
-    add(bodyText(this, 16, 16, this.training ? 'Esc training menu · R reset positions · T reset dummy % · B dummy behavior · M mute' : 'Esc pause · M mute',
+    add(bodyText(this, 16, 16, this.training ? 'Esc training menu · R reset positions · T reset dummy % · B dummy behavior · J grab · M mute' : 'Esc pause · J grab · M mute',
       13, 'rgba(255,255,255,0.65)', '500').setOrigin(0, 0));
     add(bodyText(this, GAME_WIDTH - 16, 16, this.training ? 'YOU vs DUMMY' : 'YOU vs CPU', 13, 'rgba(255,255,255,0.65)', '900').setOrigin(1, 0));
     if (this.training) this.buildTrainingHud(add);
@@ -221,13 +229,14 @@ export class BattleScene extends Phaser.Scene {
     const y = 46;
     const bg = add(this.add.graphics());
     bg.fillStyle(UI.ink, 0.55);
-    bg.fillRoundedRect(x - 6, y - 6, 340, 144, 12);
+    bg.fillRoundedRect(x - 6, y - 6, 340, 166, 12);
     const combo = add(displayText(this, x + 4, y + 16, '', 26, '#ffd23f', UI.inkCss, 6).setOrigin(0, 0.5));
     const detail = add(bodyText(this, x + 4, y + 44, '', 13, '#ffffff', '700').setOrigin(0, 0.5));
     const dummy = add(bodyText(this, x + 4, y + 66, '', 13, '#ffffff', '700').setOrigin(0, 0.5));
     const shield = add(bodyText(this, x + 4, y + 88, '', 13, '#7ee0ff', '700').setOrigin(0, 0.5));
-    const recent = add(bodyText(this, x + 4, y + 112, '', 12, '#b9b4e6', '700').setOrigin(0, 0.5));
-    this.trainingHud = { combo, detail, dummy, shield, recent };
+    const throwInfo = add(bodyText(this, x + 4, y + 110, '', 13, '#ffd2a8', '700').setOrigin(0, 0.5));
+    const recent = add(bodyText(this, x + 4, y + 134, '', 12, '#b9b4e6', '700').setOrigin(0, 0.5));
+    this.trainingHud = { combo, detail, dummy, shield, throwInfo, recent };
   }
 
   private updateTrainingHud(): void {
@@ -245,6 +254,10 @@ export class BattleScene extends Phaser.Scene {
     const shieldText = (f: FighterState) => (f.action === 'shieldBreak' ? 'BROKEN' : `${Math.round((f.shieldHp / shieldMax(this.match.rules, f)) * 100)}%`);
     const ledgeText = (f: FighterState) => (f.action === 'ledge' ? ' ⟂ledge' : '');
     h.shield.setText(`Shield: you ${shieldText(p)}${ledgeText(p)} · dummy ${shieldText(d)}${ledgeText(d)}`);
+    const lt = t.lastThrow;
+    h.throwInfo.setText(lt
+      ? `Last throw (${lt.by}): ${THROW_SHORT[lt.dir]} ${lt.damage}% → ${Math.round(lt.launch)} px/s at ${Math.round(lt.percent)}%`
+      : 'Last throw: —  (J grab · A/D/W/S throw)');
     h.recent.setText(t.recent.length ? `You: ${t.recent.join(' › ')}` : 'You: —');
     // Celebrate a finished combo of 2+ hits.
     if (on && this.comboWasActive && !c.active && c.hits >= 2) this.popup(`${c.hits} HIT COMBO!`, d.x, d.y - 120, '#ffd23f');
@@ -262,7 +275,7 @@ export class BattleScene extends Phaser.Scene {
     this.trainingPanel = openOptionsPanel(this, {
       title: 'TRAINING',
       width: 680,
-      rowH: 38,
+      rowH: 34,
       rows: [
         {
           label: 'DUMMY BEHAVIOR',
@@ -299,6 +312,17 @@ export class BattleScene extends Phaser.Scene {
           label: 'DUMMY SHIELD',
           value: () => `◀  ${Math.round(t.dummyShieldPercent)}%  ▶`,
           adjust: (d) => t.cycleDummyShield(d),
+        },
+        {
+          label: 'DUMMY THROW (Attempt Grab)',
+          value: () => `◀  ${t.dummyThrow[0].toUpperCase()}${t.dummyThrow.slice(1)}  ▶`,
+          adjust: (d) => t.cycleDummyThrow(d),
+        },
+        {
+          label: 'DUMMY GRAB ESCAPE',
+          value: () => (t.dummyEscapeMash ? 'Mash' : 'Off (passive)'),
+          press: () => t.toggleDummyEscape(),
+          adjust: () => t.toggleDummyEscape(),
         },
         { label: 'LEDGE: HANG DUMMY', value: () => 'Enter', valueColor: () => UI.muted, press: () => t.hangOnLedge('dummy') },
         { label: 'LEDGE: HANG ME', value: () => 'Enter', valueColor: () => UI.muted, press: () => t.hangOnLedge('player') },
@@ -596,6 +620,47 @@ export class BattleScene extends Phaser.Scene {
           sound.go();
           this.showCenter('GO!', '#ffd23f', 500);
         }
+        break;
+      case 'grabWhiff':
+        sound.grabWhiff();
+        break;
+      case 'grab': {
+        const style = GRABS[fighters[e.grabber].fighter].style;
+        sound.grabConnect();
+        this.effects.burst(e.x, e.y, GRAB_COLORS[style]);
+        if (style === 'web') {
+          const g = fighters[e.grabber];
+          this.effects.webLine(g.x + g.facing * 10, g.y - 50, e.x, e.y);
+        }
+        if (e.shielded) this.popup('SHIELD GRAB!', e.x, e.y - 90, '#b36bff');
+        break;
+      }
+      case 'grabClash':
+        sound.grabEscape();
+        this.effects.burst(e.x, e.y, 0xffffff);
+        break;
+      case 'pummel':
+        sound.pummel();
+        this.effects.hit(e.x, e.y, 150, slotColor(this.setup, e.grabber));
+        break;
+      case 'throw': {
+        const g = fighters[e.grabber];
+        const style = GRABS[g.fighter].style;
+        sound.throwSwing(style);
+        const color = GRAB_COLORS[style];
+        if (style === 'mech' || (e.dir === 'down' && style !== 'web')) {
+          this.effects.landImpact(e.x, g.y, 900);
+          this.cameras.main.shake(120, style === 'mech' ? 0.008 : 0.004);
+        }
+        if (style === 'web') this.effects.webLine(g.x, g.y - 50, e.x, e.y);
+        else if (style === 'clone' || style === 'ninja') this.effects.smoke(e.x, e.y, 6);
+        else if (style === 'comedic') this.effects.confetti(e.x - 40, e.y - 30, 80, [0x3fbf5f, 0xffffff, 0xff4d5e]);
+        this.effects.burst(e.x, e.y, color);
+        break;
+      }
+      case 'grabEscape':
+        sound.grabEscape();
+        this.effects.smoke(e.x, e.y, 5);
         break;
       case 'ledgeGrab':
         sound.ledgeGrab();

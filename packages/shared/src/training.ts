@@ -7,6 +7,11 @@
  */
 import { makeRules, type RulesConfig } from './config';
 import { CpuController } from './cpu';
+import { GRABS, THROW_DIRS, type ThrowDir } from './grabs';
+import { hitboxRect, hurtboxRect } from './combat';
+import { rectsOverlap } from './geometry';
+import { FIGHTERS } from './fighters';
+import { nextRandom } from './rng';
 import { emptyInput, makeInput, type InputFrame } from './input';
 import {
   createFighter, currentMove, isActionable, isOnLedge, placeOnLedge, shieldMax, type FighterState, type GameEvent, type MatchState,
@@ -16,11 +21,13 @@ import { solidExtent, stageLedges } from './stage';
 /** Unlimited stocks, no clock, no countdown — the match never ends on its own. */
 export const TRAINING_RULES: RulesConfig = makeRules({ infiniteStocks: true, timed: false, countdownFrames: 0 });
 
-export type DummyBehavior = 'stand' | 'shield' | 'jump' | 'defend' | 'attack' | 'recover' | 'cpu';
-export const DUMMY_BEHAVIORS: DummyBehavior[] = ['stand', 'shield', 'jump', 'defend', 'attack', 'recover', 'cpu'];
+export type DummyBehavior = 'stand' | 'shield' | 'grab' | 'escape' | 'jump' | 'defend' | 'attack' | 'recover' | 'cpu';
+export const DUMMY_BEHAVIORS: DummyBehavior[] = ['stand', 'shield', 'grab', 'escape', 'jump', 'defend', 'attack', 'recover', 'cpu'];
 export const DUMMY_BEHAVIOR_LABEL: Record<DummyBehavior, string> = {
   stand: 'Stand Still',
   shield: 'Hold Shield',
+  grab: 'Attempt Grab',
+  escape: 'Escape Grab',
   jump: 'Jump',
   defend: 'Defend (shield/roll)',
   attack: 'Attack',
@@ -28,7 +35,16 @@ export const DUMMY_BEHAVIOR_LABEL: Record<DummyBehavior, string> = {
   cpu: 'Normal CPU',
 };
 
+/** Which throw the Attempt Grab dummy uses. */
+export type DummyThrow = ThrowDir | 'random';
+export const DUMMY_THROWS: DummyThrow[] = ['forward', 'back', 'up', 'down', 'random'];
+
 /** Frames between the dummy's periodic actions. */
+const GRAB_EVERY = 45;
+/** How long the Attempt Grab dummy holds before throwing. */
+const DUMMY_HOLD_FRAMES = 30;
+/** Mash rate (frames between presses) for an escaping dummy. */
+const DUMMY_MASH_EVERY = 3;
 const JUMP_EVERY = 80;
 const ATTACK_EVERY = 70;
 /** How close the player must be before the Attack dummy swings (it never walks over). */
@@ -47,8 +63,14 @@ export class TrainingDummyController {
   private cpu: CpuController | null = null;
   private heavyNext = false;
   private _behavior: DummyBehavior = 'stand';
+  private rng: { rngState: number };
+  /** Throw used by the Attempt Grab behaviour. */
+  throwChoice: DummyThrow = 'forward';
+  /** Mash out of grabs (any scripted behaviour). Off = the dummy only escapes when the hold times out. */
+  escapeMash = false;
 
   constructor(readonly id: number, behavior: DummyBehavior = 'stand', private readonly seed = 0x7a11) {
+    this.rng = { rngState: seed >>> 0 };
     this.setBehavior(behavior);
   }
 
@@ -80,6 +102,12 @@ export class TrainingDummyController {
     }
     // Being hit cancels whatever it was about to do.
     if (me.action === 'hitstun') this.queue = [];
+    if (me.action === 'grabbed') {
+      this.queue = [];
+      const mash = this._behavior === 'escape' || this.escapeMash;
+      return mash && this.clock % DUMMY_MASH_EVERY === 0 ? makeInput({ jump: true }) : emptyInput();
+    }
+    if (me.action === 'holding') return this.holdInput(me);
     if (this.queue.length === 0) this.plan(m, me);
     const next = this.queue.shift();
     return next ? makeInput(next) : emptyInput();
@@ -97,6 +125,17 @@ export class TrainingDummyController {
         // Keep the shield button held; it re-raises by itself after a break or release lag.
         if (me.grounded) this.queue = [{ dodge: true }];
         return;
+      case 'grab': {
+        const foe = this.foe(m);
+        if (!foe || this.clock % GRAB_EVERY !== 0 || !isActionable(me) || !me.grounded) return;
+        const toward = foe.x >= me.x ? 1 : -1;
+        if (me.facing !== toward) {
+          this.queue.push(toward > 0 ? { right: true } : { left: true }, {});
+          return;
+        }
+        if (this.inGrabRange(me, foe)) this.queue.push({ grab: true }, {});
+        return;
+      }
       case 'jump':
         // Hold jump a few frames for a full jump, straight up.
         if (this.clock % JUMP_EVERY === 0 && me.grounded && isActionable(me)) this.queue = Array(8).fill({ jump: true });
@@ -126,6 +165,22 @@ export class TrainingDummyController {
       default:
         return;
     }
+  }
+
+  private inGrabRange(me: FighterState, foe: FighterState): boolean {
+    const box = GRABS[me.fighter].box;
+    const r = hitboxRect(me, { ...box, damage: 0, baseKnockback: 0, knockbackGrowth: 0, angle: 0 });
+    return foe.grounded && rectsOverlap(r, hurtboxRect(foe, FIGHTERS[foe.fighter].stats));
+  }
+
+  /** Holding someone: wait a moment, then use the configured throw. */
+  private holdInput(me: FighterState): InputFrame {
+    if (me.actionFrame < DUMMY_HOLD_FRAMES) return emptyInput();
+    const dir = this.throwChoice === 'random' ? THROW_DIRS[Math.floor(nextRandom(this.rng) * 4)] : this.throwChoice;
+    if (dir === 'up') return makeInput({ up: true });
+    if (dir === 'down') return makeInput({ down: true });
+    const fwd = dir === 'forward' ? me.facing : -me.facing;
+    return makeInput(fwd > 0 ? { right: true } : { left: true });
   }
 
   /** Offstage, under the stage, hanging on a ledge, or tumbling: time to (let the CPU) recover. */

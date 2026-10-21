@@ -282,6 +282,35 @@ class SoundManager {
     this.tone(160, 50, 0.5, 'sine', 0.55);
   }
 
+  // ── Grabs & throws ──────────────────────────────────────────────────────
+
+  grabWhiff(): void {
+    this.noise(0.1, 0.25, 'bandpass', 1400, 600, 0, 'combat', 1.4);
+  }
+  grabConnect(): void {
+    this.noise(0.06, 0.5, 'lowpass', 1600, 400);
+    this.tone(220, 160, 0.08, 'square', 0.18);
+  }
+  pummel(): void {
+    this.noise(0.05, 0.45, 'lowpass', 2500, 500);
+    this.tone(180, 90, 0.06, 'sine', 0.35);
+  }
+  /** Throw whoosh, flavored per fighter style (impact comes from the normal hit sound). */
+  throwSwing(style: string): void {
+    this.noise(0.18, 0.45, 'bandpass', 700, 2600, 0, 'combat', 1);
+    if (style === 'force') this.tone(70, 55, 0.4, 'sine', 0.45);
+    else if (style === 'ki') this.tone(300, 900, 0.25, 'sawtooth', 0.12);
+    else if (style === 'mech') { this.tone(90, 45, 0.25, 'square', 0.25); this.noise(0.25, 0.5, 'lowpass', 600, 120, 0.08); }
+    else if (style === 'web') { this.noise(0.08, 0.4, 'highpass', 7000, 2500); }
+    else if (style === 'clone' || style === 'ninja') this.noise(0.2, 0.3, 'highpass', 5000, 900, 0.03);
+    else if (style === 'flat') this.tone(1320, 1320, 0.05, 'square', 0.2);
+    else if (style === 'comedic') this.tone(500, 1100, 0.18, 'triangle', 0.2);
+  }
+  grabEscape(): void {
+    this.noise(0.16, 0.4, 'bandpass', 2400, 700, 0, 'combat', 1.2);
+    this.tone(600, 900, 0.08, 'triangle', 0.14);
+  }
+
   // ── Attacks ─────────────────────────────────────────────────────────────
 
   /** Quick, bright swish. */

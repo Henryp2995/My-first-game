@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  CpuController, createFighter, createMatch, FIGHTERS, FIGHTER_ORDER, getStage, makeRules, SKYFALL_ARENA, STAGE_ORDER,
+  CpuController, createFighter, createMatch, emptyInput, FIGHTERS, FIGHTER_ORDER, getStage, makeInput, makeRules, SKYFALL_ARENA, STAGE_ORDER,
   stepMatch, type FighterId,
 } from '@arena-rush/shared';
 import { allMoveIds, ATTACK_CLIPS, beatFrames, clipFor, GENERIC_CLIP, sampleAttack } from '../src/anim/clips';
@@ -135,7 +135,7 @@ describe('AnimationController', () => {
     const seen: AnimState[] = [];
     let minSquash = 1;
     for (let i = 0; i < 120; i++) {
-      const ev = stepMatch(m, [{ left: false, right: false, up: false, down: false, jump: i < 20, light: false, heavy: false, special: false, dodge: false }, { left: false, right: false, up: false, down: false, jump: false, light: false, heavy: false, special: false, dodge: false }]);
+      const ev = stepMatch(m, [makeInput({ jump: i < 20 }), emptyInput()]);
       for (const e of ev) anim.onEvent(e);
       const frame = anim.update(f)!;
       if (!seen.includes(frame.state)) seen.push(frame.state);

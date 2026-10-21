@@ -4,7 +4,8 @@
  */
 import {
   ComboTracker, DUMMY_BEHAVIORS, hangOnNearestLedge, resetPositions, setFighterDamage, setFighterShield, shieldMax, stepMatch,
-  TrainingDummyController, type DummyBehavior, type GameEvent, type InputFrame, type MatchState,
+  TrainingDummyController, DUMMY_THROWS, type DummyBehavior, type DummyThrow, type GameEvent, type InputFrame, type MatchState,
+  type ThrowDir,
 } from '@arena-rush/shared';
 
 export const DAMAGE_PRESETS = [0, 25, 50, 75, 100, 150] as const;
@@ -44,6 +45,8 @@ export class TrainingSession {
   paused = false;
   /** The player's most recent actions, newest last (input display). */
   recent: string[] = [];
+  /** The last throw that landed (throw damage / knockback testing). */
+  lastThrow: { by: 'You' | 'Dummy'; dir: ThrowDir; damage: number; launch: number; percent: number } | null = null;
 
   constructor(
     readonly match: MatchState,
@@ -71,15 +74,45 @@ export class TrainingSession {
 
   private record(events: readonly GameEvent[]): void {
     for (const e of events) {
+      if (e.type === 'hit' && e.throwDir) {
+        this.lastThrow = {
+          by: e.attacker === this.playerId ? 'You' : 'Dummy', dir: e.throwDir, damage: e.damage, launch: e.launchSpeed,
+          percent: this.match.fighters[e.victim].damage,
+        };
+      }
+      if (e.type === 'grab' && e.grabber === this.playerId) this.pushRecent(e.shielded ? 'SHIELD GRAB' : 'GRAB');
+      else if (e.type === 'pummel' && e.grabber === this.playerId) this.pushRecent('PUMMEL');
+      else if (e.type === 'throw' && e.grabber === this.playerId) this.pushRecent(`${e.dir.toUpperCase()} THROW`);
       let label: string | null = null;
       if (e.type === 'attack' && e.id === this.playerId) label = ACTION_LABEL[e.slot] ?? e.slot.toUpperCase();
       else if (e.type === 'jump' && e.id === this.playerId) label = e.double ? 'AIR JUMP' : 'JUMP';
       else if (e.type === 'dodge' && e.id === this.playerId) label = 'DODGE';
-      if (label) {
-        this.recent.push(label);
-        if (this.recent.length > 6) this.recent.shift();
-      }
+      if (label) this.pushRecent(label);
     }
+  }
+
+  private pushRecent(label: string): void {
+    this.recent.push(label);
+    if (this.recent.length > 6) this.recent.shift();
+  }
+
+  get dummyThrow(): DummyThrow {
+    return this.dummy.throwChoice;
+  }
+
+  cycleDummyThrow(dir: 1 | -1): DummyThrow {
+    const i = DUMMY_THROWS.indexOf(this.dummy.throwChoice);
+    this.dummy.throwChoice = DUMMY_THROWS[(i + dir + DUMMY_THROWS.length) % DUMMY_THROWS.length];
+    return this.dummy.throwChoice;
+  }
+
+  get dummyEscapeMash(): boolean {
+    return this.dummy.escapeMash;
+  }
+
+  toggleDummyEscape(): boolean {
+    this.dummy.escapeMash = !this.dummy.escapeMash;
+    return this.dummy.escapeMash;
   }
 
   get dummyDamage(): number {

@@ -1,4 +1,4 @@
-import { FIGHTERS, type FighterId, type FighterState, type GameEvent, type MoveSlot } from '@arena-rush/shared';
+import { FIGHTERS, GRABS, type FighterId, type FighterState, type GameEvent, type MoveSlot, type ThrowDir } from '@arena-rush/shared';
 import { clipFor, sampleAttack } from './clips';
 import { clamp01, easeInOut, easeOut, mix, P, type Pose } from './pose';
 import { PROFILES, type AnimProfile, type GaitDef } from './profiles';
@@ -44,6 +44,32 @@ const LEDGE_HANG: Partial<Pose> = { lean: -0.12, bob: 0, armF: [2.85, 0.15], arm
 const LEDGE_PULL: Partial<Pose> = { lean: 0.35, bob: 6, armF: [1.2, 1.6], armB: [0.9, 1.8], legF: [1.2, 1.9], legB: [0.5, 1.6] };
 /** Guarding behind the shield bubble. */
 const SHIELD_GUARD: Partial<Pose> = { lean: 0.12, bob: 5, armF: [1.55, 1.5], armB: [1.3, 1.7], legF: [0.35, 0.5], legB: [-0.3, 0.45], expression: 'focus' };
+
+/** Reaching out to grab, holding someone, and being held. */
+const GRAB_REACH: Partial<Pose> = { lean: 0.3, bob: 3, armF: [1.65, 0.1], armB: [1.45, 0.2], legF: [0.55, 0.4], legB: [-0.45, 0.3], prop: null };
+const HOLDING: Partial<Pose> = { lean: 0.12, bob: 2, armF: [1.35, 0.9], armB: [1.2, 1.0], legF: [0.35, 0.3], legB: [-0.3, 0.3], prop: null, expression: 'focus' };
+
+function grabbedPose(t: number): Partial<Pose> {
+  return {
+    lean: -0.2, bob: 0, dx: Math.sin(t * 0.9) * 1.5, armF: [0.6 + Math.sin(t * 0.5) * 0.3, 0.9], armB: [0.4, 1.1],
+    legF: [0.25, 0.3], legB: [-0.2, 0.4], expression: 'hurt',
+  };
+}
+
+/** Throw poses: wind-up (u≈0) to release, per direction. */
+export function throwPose(dir: ThrowDir, u: number): Partial<Pose> {
+  const k = easeOut(clamp01(u));
+  switch (dir) {
+    case 'forward':
+      return { lean: 0.1 + k * 0.3, bob: 3, armF: [1.0 + k * 0.9, 0.9 - k * 0.8], armB: [0.8 + k * 0.8, 1.0 - k * 0.8], legF: [0.6, 0.4], legB: [-0.5, 0.3], prop: null };
+    case 'back':
+      return { lean: 0.1 - k * 0.5, bob: 2, armF: [1.3 - k * 2.6, 0.4], armB: [1.1 - k * 2.4, 0.4], legF: [0.3, 0.5], legB: [-0.6, 0.3], flip: k > 0.5, prop: null };
+    case 'up':
+      return { lean: -0.1, bob: -k * 6, armF: [1.3 + k * 1.6, 0.6 - k * 0.5], armB: [1.1 + k * 1.6, 0.6 - k * 0.5], legF: [0.2, 0.2], legB: [-0.2, 0.2], prop: null };
+    default:
+      return { lean: 0.2 + k * 0.35, bob: 4 + k * 6, armF: [1.6 - k * 1.1, 0.5], armB: [1.4 - k * 1.0, 0.5], legF: [0.6, 0.8], legB: [-0.4, 0.6], prop: null };
+  }
+}
 
 function dizzyPose(t: number): Partial<Pose> {
   return {
@@ -291,6 +317,21 @@ export class AnimationController {
       case 'shieldBreak':
         target = P({ ...prof.stance, ...dizzyPose(this.clock) });
         break;
+      case 'grab':
+        target = P({ ...prof.stance, ...GRAB_REACH });
+        break;
+      case 'hold':
+        target = P({ ...prof.stance, ...HOLDING });
+        break;
+      case 'grabbed':
+        target = P({ ...prof.stance, ...grabbedPose(this.clock) });
+        break;
+      case 'throw': {
+        const dir = f.throwDir ?? 'forward';
+        const t2 = GRABS[f.fighter].throws[dir];
+        target = P({ ...prof.stance, ...throwPose(dir, f.actionFrame / Math.max(1, t2.releaseFrame)) });
+        break;
+      }
       case 'knockback':
         this.tumbleSpin -= 0.35;
         target = P({ ...prof.stance, ...hurtPose(this.clock), spin: this.tumbleSpin });
@@ -451,6 +492,18 @@ export function sampleStateFrame(fighter: FighterId, state: AnimState, t: number
       break;
     case 'shieldBreak':
       pose = P({ ...stance, ...dizzyPose(tt) });
+      break;
+    case 'grab':
+      pose = P({ ...stance, ...GRAB_REACH });
+      break;
+    case 'hold':
+      pose = P({ ...stance, ...HOLDING });
+      break;
+    case 'grabbed':
+      pose = P({ ...stance, ...grabbedPose(tt) });
+      break;
+    case 'throw':
+      pose = P({ ...stance, ...throwPose('forward', (tt % 30) / 15) });
       break;
     case 'knockback':
     case 'ko':

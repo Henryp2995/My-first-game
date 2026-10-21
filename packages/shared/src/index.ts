@@ -8,3 +8,4 @@ export * from './combat';
 export * from './match';
 export * from './cpu';
 export * from './training';
+export * from './grabs';

@@ -6,12 +6,14 @@ export type AnimState =
   | 'jumpStart' | 'rise' | 'fall' | 'land'
   | 'light' | 'heavy' | 'special' | 'aerial'
   | 'dodge' | 'hit' | 'knockback' | 'ko' | 'respawn' | 'victory'
-  | 'ledgeHang' | 'ledgeClimb' | 'ledgeRoll' | 'shield' | 'shieldBreak';
+  | 'ledgeHang' | 'ledgeClimb' | 'ledgeRoll' | 'shield' | 'shieldBreak'
+  | 'grab' | 'hold' | 'grabbed' | 'throw';
 
 export const ANIM_STATES: AnimState[] = [
   'idle', 'walk', 'run', 'jumpStart', 'rise', 'fall', 'land', 'light', 'heavy', 'special', 'aerial',
   'dodge', 'hit', 'knockback', 'ko', 'respawn', 'victory',
   'ledgeHang', 'ledgeClimb', 'ledgeRoll', 'shield', 'shieldBreak',
+  'grab', 'hold', 'grabbed', 'throw',
 ];
 
 /**
@@ -23,6 +25,10 @@ export const STATE_PRIORITY: Record<AnimState, number> = {
   ko: 100,
   hit: 90,
   shieldBreak: 85,
+  grabbed: 88,
+  throw: 82,
+  grab: 80,
+  hold: 78,
   ledgeHang: 75,
   ledgeClimb: 75,
   ledgeRoll: 75,
@@ -51,6 +57,7 @@ export const TRANSITION_FRAMES: Record<AnimState, number> = {
   dodge: 2, land: 2, jumpStart: 1,
   rise: 4, fall: 7, run: 6, walk: 6, idle: 7, respawn: 0, victory: 6,
   ledgeHang: 2, ledgeClimb: 2, ledgeRoll: 1, shield: 2, shieldBreak: 0,
+  grab: 1, hold: 2, grabbed: 0, throw: 1,
 };
 
 export interface StateInputs {
@@ -90,6 +97,16 @@ export function simState(i: StateInputs): AnimState | null {
       return 'shield';
     case 'shieldBreak':
       return 'shieldBreak';
+    case 'grab':
+      return 'grab';
+    case 'holding':
+      return 'hold';
+    case 'grabbed':
+      return 'grabbed';
+    case 'throw':
+      return 'throw';
+    case 'grabRelease':
+      return 'land';
     case 'attack':
       return i.move ?? 'light';
     case 'landing':

@@ -1,5 +1,6 @@
 import { hitboxRect, hurtboxRect } from './combat';
 import { FIGHTERS, type FighterId, type MoveSlot } from './fighters';
+import { GRABS, type ThrowDir } from './grabs';
 import { rectsOverlap, type Rect } from './geometry';
 import { emptyInput, type InputFrame } from './input';
 import type { FighterAction, FighterState, MatchState } from './match';
@@ -31,24 +32,34 @@ export interface CpuProfile {
   spacingError: number;
   /** Max quick attacks chained into a stunned opponent before mixing up (prevents jab-locks). */
   maxJabChain: number;
+  /** Chance per decision to grab a shielding opponent in range. */
+  grabVsShield: number;
+  /** Chance per decision to grab a (non-shielding) opponent in range. */
+  grabRate: number;
+  /** Frames between button presses while mashing out of a grab. */
+  mashInterval: number;
 }
 
 export const CPU_PROFILES: Record<CpuDifficulty, CpuProfile> = {
   easy: {
     label: 'Easy', reactionFrames: 24, thinkInterval: 14, aggression: 0.5, attackRate: 0.3,
     dodgeRate: 0.04, recoverySkill: 0.45, hesitation: 0.3, smart: false, spacingError: 45, maxJabChain: 1,
+    grabVsShield: 0.25, grabRate: 0.03, mashInterval: 12,
   },
   normal: {
     label: 'Normal', reactionFrames: 15, thinkInterval: 9, aggression: 0.75, attackRate: 0.55,
     dodgeRate: 0.18, recoverySkill: 0.85, hesitation: 0.12, smart: false, spacingError: 25, maxJabChain: 2,
+    grabVsShield: 0.5, grabRate: 0.06, mashInterval: 7,
   },
   hard: {
     label: 'Hard', reactionFrames: 9, thinkInterval: 5, aggression: 0.9, attackRate: 0.8,
     dodgeRate: 0.4, recoverySkill: 1, hesitation: 0.04, smart: true, spacingError: 12, maxJabChain: 2,
+    grabVsShield: 0.8, grabRate: 0.1, mashInterval: 4,
   },
   expert: {
     label: 'Expert', reactionFrames: 4, thinkInterval: 2, aggression: 1, attackRate: 1,
     dodgeRate: 0.65, recoverySkill: 1, hesitation: 0, smart: true, spacingError: 4, maxJabChain: 3,
+    grabVsShield: 0.9, grabRate: 0.12, mashInterval: 3,
   },
 };
 
@@ -68,7 +79,7 @@ interface Snapshot {
   grounded: boolean;
 }
 
-type Button = 'light' | 'heavy' | 'special' | 'dodge' | 'jump';
+type Button = 'light' | 'heavy' | 'special' | 'dodge' | 'jump' | 'grab';
 
 interface Press {
   button: Button;
@@ -111,6 +122,8 @@ export class CpuController {
   private ledgeWait = -1;
   /** Clock time of the last shield, so the CPU doesn't shield every single attack. */
   private lastShield = -999;
+  /** While holding someone: frames to wait, pummels left, and the chosen throw. */
+  private holdPlan: { wait: number; pummels: number; dir: ThrowDir } | null = null;
 
   constructor(readonly id: number, readonly difficulty: CpuDifficulty = 'normal', seed = 0x5eed) {
     this.profile = CPU_PROFILES[difficulty];
@@ -182,6 +195,28 @@ export class CpuController {
       return out;
     }
     this.ledgeWait = -1;
+
+    // Grabbed: mash buttons to break free (fresh presses only — the sim ignores held keys).
+    if (me.action === 'grabbed') {
+      this.holding = null;
+      this.queued = null;
+      if (this.clock % this.profile.mashInterval === 0) {
+        const k = (this.clock / this.profile.mashInterval) % 3;
+        if (k === 0) out.jump = true;
+        else if (k === 1) out.light = true;
+        else setDir(out, this.clock % 2 === 0 ? 1 : -1);
+      }
+      return out;
+    }
+    if (me.action === 'holding') {
+      this.holding = null;
+      this.throwDecision(m, me, foe, stage, out);
+      this.flushPress(out);
+      return out;
+    }
+    this.holdPlan = null;
+    if (me.action === 'grab' || me.action === 'throw' || me.action === 'grabRelease') return out;
+
     if (me.action === 'ledgeClimb' || me.action === 'ledgeRoll' || me.action === 'shieldBreak') {
       this.holding = null;
       return out;
@@ -305,6 +340,59 @@ export class CpuController {
   }
 
   /**
+   * Holding someone: maybe pummel a little, then throw. Smart CPUs throw toward the nearest
+   * edge once the opponent is at KO percent, use down/up throws for follow-ups at low percent.
+   */
+  private throwDecision(m: MatchState, me: FighterState, foe: Snapshot | null, g: StageGeo, out: InputFrame): void {
+    const prof = this.profile;
+    if (!this.holdPlan) {
+      const victim = me.grabPartner !== null ? m.fighters[me.grabPartner] : null;
+      const pct = victim?.damage ?? foe?.damage ?? 0;
+      const ahead = me.facing > 0 ? g.x2 - me.x : me.x - g.x1; // distance to the edge in front
+      const behind = me.facing > 0 ? me.x - g.x1 : g.x2 - me.x;
+      const throws = GRABS[me.fighter].throws;
+      const r = nextRandom(this.rng);
+      let dir: ThrowDir;
+      if (!prof.smart) {
+        dir = (['forward', 'back', 'up', 'down'] as ThrowDir[])[Math.floor(r * 4)];
+      } else if (pct >= KO_PERCENT) {
+        dir = behind < ahead ? 'back' : 'forward';
+      } else if (behind < 220) {
+        dir = 'back'; // toss them offstage behind us
+      } else if (pct < 60) {
+        dir = r < 0.6 ? 'down' : 'up'; // low percent: combo starters
+      } else {
+        dir = throws.up.baseKnockback >= 500 && r < 0.6 ? 'up' : 'forward';
+      }
+      const pummels = prof.smart ? (pct < 120 ? 1 + Math.floor(r * 2) : 0) : r < 0.3 ? 1 : 0;
+      this.holdPlan = { wait: m.rules.grab.holdInputDelay + Math.floor(prof.reactionFrames / 2), pummels, dir };
+    }
+    const plan = this.holdPlan;
+    if (plan.wait > 0) {
+      plan.wait--;
+      return;
+    }
+    if (plan.pummels > 0) {
+      if (me.pummelCooldown === 0 && !this.prev.grab) {
+        plan.pummels--;
+        out.grab = true;
+      }
+      return;
+    }
+    if (plan.dir === 'up') out.up = true;
+    else if (plan.dir === 'down') out.down = true;
+    else setDir(out, plan.dir === 'forward' ? me.facing : -me.facing);
+  }
+
+  /** In grab range right now (same rule the sim uses: the grab box against the hurtbox)? */
+  private canGrab(me: FighterState, foe: Snapshot): boolean {
+    if (!me.grounded || !foe.grounded) return false;
+    const box = GRABS[me.fighter].box;
+    const r = hitboxRect({ x: me.x, y: me.y, facing: me.facing }, { ...box, damage: 0, baseKnockback: 0, knockbackGrowth: 0, angle: 0 });
+    return rectsOverlap(r, hurtboxRect(foe, FIGHTERS[foe.fighter].stats));
+  }
+
+  /**
    * Defend against an incoming attack: hold shield for about as long as the attack lasts, or
    * dodge (roll away / spot dodge / air dodge). Shield is skipped when it's low, so the CPU lets
    * it regenerate instead of breaking it.
@@ -370,7 +458,23 @@ export class CpuController {
         else this.moveDir = 0;
       }
 
-      if (actionable && this.chooseAttack(m, me, foe, dirTo, stage, adx, dy)) return;
+      // Grabs beat shields: grab a shielding opponent in range (and sometimes a careless one).
+      // Against a shield, walk in for the grab instead of hitting the shield (its pushback
+      // would only push us back out of grab range).
+      let goGrab = false;
+      if (actionable && me.grounded && foe.grounded && foe.action !== 'grabbed') {
+        const shielding = foe.action === 'shield';
+        if (me.facing === dirTo && this.canGrab(me, foe)) {
+          if (this.chance(shielding ? prof.grabVsShield : prof.grabRate)) {
+            this.press({ button: 'grab', dir: 0 });
+            return;
+          }
+        } else if (shielding && adx < 170 && this.chance(prof.grabVsShield) && this.safeToMove(me, stage, dirTo)) {
+          this.moveDir = dirTo;
+          goGrab = true;
+        }
+      }
+      if (!goGrab && actionable && this.chooseAttack(m, me, foe, dirTo, stage, adx, dy)) return;
 
       // Chase vertically.
       if (me.grounded && dy < -110 && adx < 220 && this.chance(0.6)) {

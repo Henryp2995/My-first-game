@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import {
-  DEFAULT_RULES, FIGHTERS, currentMove, hurtboxRect, activeHitboxes, hitboxRect,
+  DEFAULT_RULES, FIGHTERS, GRABS, activeGrabBox, currentMove, hurtboxRect, activeHitboxes, hitboxRect,
   type FighterState, type GameEvent,
 } from '@arena-rush/shared';
 import { AnimationController, type AnimFrame } from '../anim/controller';
@@ -162,6 +162,8 @@ export class FighterView {
     this.drawMoveEffects(f, res.handF, x, y);
     this.drawShield(f, x, y);
     if (f.action === 'shieldBreak') this.drawDizzy(res.top, x);
+    if (f.action === 'holding' && f.actionFrame >= DEFAULT_RULES.grab.holdInputDelay) this.drawThrowArrows(x, y - def.stats.height * 0.5);
+    if (f.action === 'grabbed') this.drawEscapeMeter(f, x, res.top - 26);
 
     // Player tag arrow
     const tagY = res.top - 8;
@@ -187,6 +189,16 @@ export class FighterView {
         const r = hitboxRect(f, box);
         fx.fillStyle(0xff0000, 0.35);
         fx.fillRect(r.x, r.y, r.w, r.h);
+      }
+      // Grab box: outlined during startup, filled purple while active.
+      const active = activeGrabBox(f);
+      if (active) {
+        fx.fillStyle(0xb36bff, 0.45);
+        fx.fillRect(active.x, active.y, active.w, active.h);
+      } else if (f.action === 'grab' && f.grabPartner === null) {
+        const r = hitboxRect(f, { ...GRABS[f.fighter].box, damage: 0, baseKnockback: 0, knockbackGrowth: 0, angle: 0 });
+        fx.lineStyle(1.5, 0xb36bff, 0.8);
+        fx.strokeRect(r.x, r.y, r.w, r.h);
       }
     }
   }
@@ -215,6 +227,33 @@ export class FighterView {
       fx.fillStyle(0xffffff, 0.12 * this.shieldFlash);
       fx.fillCircle(x, cy, r + 2);
     }
+  }
+
+  /** "Throw ready" hint: four arrows around a fighter holding someone. */
+  private drawThrowArrows(x: number, cy: number): void {
+    const fx = this.fxG;
+    const pulse = 0.55 + Math.sin(this.clock * 0.25) * 0.35;
+    const r = 58;
+    fx.fillStyle(0xffffff, pulse);
+    const tri = (ax: number, ay: number, dx: number, dy: number) => {
+      const px = -dy;
+      const py = dx;
+      fx.fillTriangle(ax + dx * 9, ay + dy * 9, ax + px * 7, ay + py * 7, ax - px * 7, ay - py * 7);
+    };
+    tri(x + r, cy, 1, 0);
+    tri(x - r, cy, -1, 0);
+    tri(x, cy - r - 10, 0, -1);
+    tri(x, cy + r - 10, 0, 1);
+  }
+
+  /** How close a grabbed fighter is to breaking free (fills as the hold runs out). */
+  private drawEscapeMeter(f: FighterState, x: number, y: number): void {
+    const fx = this.fxG;
+    const left = Math.max(0, Math.min(1, f.grabTimer / DEFAULT_RULES.grab.holdMaxFrames));
+    fx.fillStyle(0x000000, 0.55);
+    fx.fillRoundedRect(x - 30, y, 60, 7, 3);
+    fx.fillStyle(0xffd23f, 1);
+    fx.fillRoundedRect(x - 30, y, Math.max(4, 60 * (1 - left)), 7, 3);
   }
 
   /** Stars circling the head during a shield-break stun. */

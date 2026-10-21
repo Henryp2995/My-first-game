@@ -1,9 +1,9 @@
 import {
   createMatch, emptyInput, makeInput, makeRules, stepMatch,
-  type FighterId, type GameEvent, type InputFrame, type MatchState, type RulesConfig,
+  type FighterId, type GameEvent, type InputFrame, type MatchState, type RulesOverrides,
 } from '../src';
 
-export function setupMatch(fighters: FighterId[] = ['luigi', 'luigi'], rules: Partial<RulesConfig> = {}, seed = 1): MatchState {
+export function setupMatch(fighters: FighterId[] = ['luigi', 'luigi'], rules: RulesOverrides = {}, seed = 1): MatchState {
   return createMatch(fighters.map((fighter) => ({ fighter })), { rules: makeRules({ countdownFrames: 0, ...rules }), seed });
 }
 

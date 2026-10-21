@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 
 interface Particle {
-  kind: 'spark' | 'ring' | 'puff' | 'flash' | 'beam' | 'star' | 'confetti';
+  kind: 'spark' | 'ring' | 'puff' | 'flash' | 'beam' | 'star' | 'confetti' | 'streak';
   x: number;
   y: number;
   vx: number;
@@ -30,13 +30,19 @@ export class Effects {
     if (this.parts.length > 600) this.parts.splice(0, this.parts.length - 600);
   }
 
-  hit(x: number, y: number, strength: number, color: number): void {
+  /** Impact burst. Half the sparks fly along the launch direction (dirX, dirY) so hits read directionally. */
+  hit(x: number, y: number, strength: number, color: number, dirX = 0, dirY = 0): void {
     const s = Math.min(1, strength / 1800);
+    const launchAngle = Math.atan2(dirY, dirX);
+    const directional = dirX !== 0 || dirY !== 0;
     this.add({ kind: 'flash', x, y, size: 26 + s * 50, life: 6, maxLife: 6, color: 0xffffff });
     this.add({ kind: 'ring', x, y, size: 10, life: 14 + s * 8, maxLife: 14 + s * 8, color });
+    if (s > 0.45) this.add({ kind: 'ring', x, y, size: 24, life: 22, maxLife: 22, color: 0xffffff });
     const n = 6 + Math.round(s * 12);
     for (let i = 0; i < n; i++) {
-      const a = Math.random() * Math.PI * 2;
+      const a = directional && i % 2 === 0
+        ? launchAngle + (Math.random() - 0.5) * 0.9
+        : Math.random() * Math.PI * 2;
       const sp = 250 + Math.random() * (400 + s * 700);
       this.add({
         kind: 'spark', x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
@@ -48,6 +54,25 @@ export class Effects {
         this.add({ kind: 'star', x, y, vx: (Math.random() - 0.5) * 500, vy: -200 - Math.random() * 300, gravity: 900, life: 30, maxLife: 30, size: 9, color: 0xffd23f });
       }
     }
+  }
+
+  /** Dust ring + side puffs when a launched fighter slams into the ground. */
+  landImpact(x: number, y: number, strength: number): void {
+    const s = Math.min(1, strength / 1500);
+    this.add({ kind: 'ring', x, y: y - 4, size: 8, life: 16, maxLife: 16, color: 0xf1ecff });
+    for (const side of [-1, 1]) {
+      for (let i = 0; i < 4 + Math.round(s * 4); i++) {
+        this.add({
+          kind: 'puff', x: x + side * 10, y: y - 4, vx: side * (120 + Math.random() * 260 * (0.5 + s)), vy: -20 - Math.random() * 70,
+          life: 20 + Math.random() * 12, maxLife: 32, size: 7 + Math.random() * 7, color: 0xf1ecff,
+        });
+      }
+    }
+  }
+
+  /** Speed line trailing a launched fighter, pointing back along its flight path. */
+  streak(x: number, y: number, vx: number, vy: number, color: number): void {
+    this.add({ kind: 'streak', x, y, vx: -vx * 0.04, vy: -vy * 0.04, angle: Math.atan2(vy, vx), size: Math.min(90, Math.hypot(vx, vy) * 0.05), life: 10, maxLife: 10, color });
   }
 
   dust(x: number, y: number, amount = 4, dir = 0): void {
@@ -182,6 +207,11 @@ export class Effects {
           const ey = p.y + sa * p.size;
           g.fillStyle(p.color, t * 0.85);
           g.fillTriangle(p.x - sa * w, p.y + ca * w, p.x + sa * w, p.y - ca * w, ex, ey);
+          break;
+        }
+        case 'streak': {
+          g.lineStyle(4 * t + 1, p.color, t * 0.8);
+          g.lineBetween(p.x, p.y, p.x - Math.cos(p.angle) * p.size, p.y - Math.sin(p.angle) * p.size);
           break;
         }
         case 'confetti': {

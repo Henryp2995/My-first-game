@@ -185,7 +185,7 @@ export class CpuController {
     }
 
     if (this.isOffstage(me, stage)) {
-      this.recover(me, stage, out);
+      this.recover(m, me, stage, out);
     } else {
       this.recovering = false;
       if (foe) this.neutral(m, me, foe, stage, out);
@@ -203,7 +203,8 @@ export class CpuController {
     return me.x < p.x1 - 8 || me.x > p.x2 + 8 || me.y > p.y + 4;
   }
 
-  private recover(me: FighterState, p: Platform, out: InputFrame): void {
+  private recover(m: MatchState, me: FighterState, p: Platform, out: InputFrame): void {
+    const canAirDodge = canDodge(m, me);
     if (!this.recovering) {
       this.recovering = true;
       this.goodRecovery = this.chance(this.profile.recoverySkill);
@@ -214,6 +215,17 @@ export class CpuController {
     const outside = (me.x - edgeX) * side; // > 0 when past the ledge
     const below = me.y - p.y; // > 0 when below the stage top
     const toward = outside > -12 ? -side : side; // under the stage: get out from underneath first
+    const underStage = outside < 0 && below > 0;
+    // Vanish reads its direction when it fires (end of startup), so keep aiming until then:
+    // straight out from under the stage, otherwise up (and toward the stage when far away).
+    const vanishDir = underStage ? side : outside > 140 ? toward : 0;
+    const vanishUp = !underStage;
+    const move = me.action === 'attack' && me.move ? def.moves[me.move] : null;
+    if (move?.behavior?.type === 'vanish' && me.actionFrame < move.startup) {
+      setDir(out, vanishDir);
+      out.up = vanishUp;
+      return;
+    }
     if (!this.holding) setDir(out, toward);
 
     const jumpsLeft = me.jumpsUsed < def.stats.maxJumps;
@@ -233,16 +245,16 @@ export class CpuController {
         this.press({ button: 'heavy', dir: toward });
       } else if (!used('special') && outside > 120 && below < 160) {
         this.press({ button: 'special', dir: toward });
-      } else if (me.dodgeCooldown <= 0) {
+      } else if (canAirDodge) {
         this.press({ button: 'dodge', dir: toward, up: true });
       }
     } else if (me.fighter === 'sheik') {
       if (!used('special')) {
-        this.press({ button: 'special', dir: outside > 140 ? toward : 0, up: true });
-      } else if (me.dodgeCooldown <= 0) {
+        this.press({ button: 'special', dir: vanishDir, up: vanishUp });
+      } else if (canAirDodge) {
         this.press({ button: 'dodge', dir: toward, up: true });
       }
-    } else if (me.dodgeCooldown <= 0) {
+    } else if (canAirDodge) {
       this.press({ button: 'dodge', dir: toward, up: true });
     }
   }
@@ -260,7 +272,7 @@ export class CpuController {
     const actionable = me.action === 'idle' || me.action === 'run' || me.action === 'air';
 
     // React to an incoming attack.
-    if (actionable && foe.action === 'attack' && foe.move && me.dodgeCooldown <= 0) {
+    if (actionable && foe.action === 'attack' && foe.move && canDodge(m, me)) {
       const key = `${foe.id}:${foe.move}:${Math.floor((this.clock - foe.actionFrame) / 4)}`;
       const move = FIGHTERS[foe.fighter].moves[foe.move];
       const facingMe = foe.facing === Math.sign(me.x - foe.x) || move.hitboxes.some((h) => h.autoDirection);
@@ -310,7 +322,8 @@ export class CpuController {
       const dir = this.moveDir !== 0 && this.safeToMove(me, stage, this.moveDir) ? this.moveDir : 0;
       setDir(out, dir);
       // Smarter CPUs fast fall onto opponents below them.
-      if (prof.smart && !me.grounded && me.vy > 0 && dy > 60 && !me.fastFalling && !this.prev.down) out.down = true;
+      const overStage = me.x > stage.x1 + 30 && me.x < stage.x2 - 30;
+      if (prof.smart && overStage && !me.grounded && me.vy > 0 && dy > 60 && !me.fastFalling && !this.prev.down) out.down = true;
     }
   }
 
@@ -328,7 +341,9 @@ export class CpuController {
         this.press({ button: 'special', dir, hold: charge + 10 });
         return true;
       }
-      if (me.fighter === 'sheik' && adx > 170 && adx < 300 && this.chance(0.12)) {
+      const vanishTo = me.x + dir * (FIGHTERS.sheik.moves.special.behavior?.type === 'vanish' ? FIGHTERS.sheik.moves.special.behavior.distance : 0);
+      const staysOnStage = vanishTo > stage.x1 + 40 && vanishTo < stage.x2 - 40;
+      if (me.fighter === 'sheik' && staysOnStage && adx > 170 && adx < 300 && this.chance(0.12)) {
         this.press({ button: 'special', dir });
         return true;
       }
@@ -406,6 +421,12 @@ export class CpuController {
     out.down = !!p.down;
     if (p.hold) this.holding = { button: p.button, frames: p.hold, dir: p.dir, up: !!p.up };
   }
+}
+
+/** Same rule the simulation enforces: dodge cooldown, plus a limited number of air dodges per airtime. */
+function canDodge(m: MatchState, me: FighterState): boolean {
+  if (me.dodgeCooldown > 0) return false;
+  return me.grounded || me.airDodgesUsed < m.rules.dodge.airDodgesPerAirtime;
 }
 
 function setDir(out: InputFrame, dir: number): void {

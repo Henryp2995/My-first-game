@@ -138,15 +138,35 @@ arena-rush/
 - **Every fighter is driven by an `InputSource`.** `MatchSetup.players` is a list of slots: `{ fighter, control: 'human' }` or `{ fighter, control: 'cpu', difficulty }`. The battle scene creates a `KeyboardInputSource` (P1 keys) or a `CpuInputSource` for each slot. The simulation itself has no idea who is human.
 - **The client is ready for networking.** Clients only produce inputs, and `encodeInput` packs an input frame into 9 bits. In Phase 3 a `'remote'` slot type and a network `InputSource` get added, and the server runs the same `stepMatch` (and `CpuController`, for bots) inside a Colyseus room.
 
-### Knockback model
+### Combat physics
 
-`launchSpeed = (base + growth × percentAfterHit × (0.5 + damage/20)) × 2 / (1 + weight/100)`
+All gameplay values shared by every fighter live in `packages/shared/src/config.ts` (`DEFAULT_RULES`). Per-character values (speeds, gravity, jumps, traction, weight, moves) live in `fighters.ts`.
 
-A launch is stored as a separate knockback velocity that decays linearly (`knockbackDecay`) while gravity keeps acting on the fighter. Hitstun scales with launch speed, and hitstop scales with damage. Roughly where heavies KO a medium-weight fighter from mid-stage: G&W hammer about 125%, Luigi uppercut about 115%, Sheik spin kick about 185% (about 140% near the ledge).
+**Knockback** is smooth (linear in percent, with no thresholds):
+
+`launchSpeed = (base + growth × percentAfterHit × (damageFactorBase + damage × damageFactorPerDamage)) × (1 + refWeight/100) / (1 + weight/100) × scale`
+
+The knobs are `combat.knockback.{scale, damageFactorBase, damageFactorPerDamage, referenceWeight}`, plus each hitbox's `baseKnockback`, `knockbackGrowth`, `angle` and `hitstunMultiplier`.
+
+- **Launch direction:** the hitbox angle is measured from the attacker's facing; 90° is up and negative angles spike downward. Spinning moves (`autoDirection`) launch away from the attacker on either side. A spike on a grounded fighter pops them up instead.
+- **Momentum:** the launch is stored as its own velocity and decays linearly (`knockbackDecay`) while gravity keeps acting, so fighters arc naturally. They can steer a little during hitstun (`hitstunDriftSpeed/Accel`). Fast spikes bounce off the floor (`groundBounceSpeed`).
+- **Hitstun:** `launchSpeed × hitstunPerSpeed`, clamped to `[minHitstun, maxHitstun]`. Each consecutive hit in a combo multiplies it by `comboHitstunDecay` (floor `comboHitstunFloor`), and the combo resets after `comboResetFrames` free frames, so no jab string can lock a player. Landing caps the remaining hitstun at `hitstunLandingCap`.
+- **Hitstop:** `hitstopBase + damage × hitstopPerDamage`, clamped to `[hitstopMin, hitstopMax]`. That gives 2–3 frames for lights, 5–6 for heavies, and up to 9 for big specials. Only the attacker and the victim freeze; everything else keeps running.
+- **Recovery:** a double jump, one air dodge per airtime (`dodge.airDodgesPerAirtime`), and character recovery moves (Luigi's rising uppercut and rocket, Sheik's directional Vanish). Getting hit refunds these, but never beyond the normal amount.
+
+Approximate KO percents against a medium-weight fighter:
+
+| Heavy | from mid-stage | from the ledge |
+|---|---|---|
+| G&W Hammer | ~125% | ~95% |
+| Luigi Uppercut | ~115% | ~115% |
+| Sheik Spin Kick | ~185% | ~140% |
+
+The lightweight G&W dies about 20–30% earlier. Light attacks never KO on their own.
 
 ## Testing
 
-`npm test` runs 64 Vitest tests against the shared simulation. They cover:
+`npm test` runs 97 Vitest tests against the shared simulation. They cover:
 
 - movement, acceleration, traction differences, gravity and landing
 - one-way platforms (jumping through and dropping through)
@@ -160,7 +180,8 @@ A launch is stored as a separate knockback velocity that decays linearly (`knock
 - stock loss, KO credit, respawn, the respawn-platform timeout, elimination
 - winner detection (by stocks, on time by stocks and then damage, draws)
 - the countdown, determinism, and input encoding
-- the CPU: produces only InputFrames, approaches, releases buttons between presses, damages a player at every difficulty, each difficulty beats the one below, recovers to the stage for every fighter, finishes full matches, and caps jab strings
+- combat physics: smooth knockback, weight, launch angles (mirrored when facing left, auto-direction, spikes), momentum decay under gravity, hitstun scaling, the hitstun lockout and recovery, landing cap, combo decay against perfect jab-mashing, hitstop ranges and timing, air control, fast fall, one air dodge per airtime, no jump refresh from walls, hitbox windows, single-hit registration, trades, recovery-frame cutoff, invulnerability, aerial tracking, all four blast zones, respawn
+- the CPU: produces only InputFrames, approaches, releases buttons between presses, damages a player at every difficulty, each difficulty beats the one below, recovers to the stage for every fighter, finishes full matches, caps jab strings, aims Vanish through its startup, uses the uppercut to recover, respects the air-dodge limit, and steers toward the stage during hitstun
 
 ## Roadmap
 

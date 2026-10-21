@@ -335,8 +335,11 @@ export class BattleScene extends Phaser.Scene {
   private ambientEffects(f: FighterState): void {
     if (f.action === 'dead' || f.eliminated) return;
     const kb = Math.hypot(f.kbx, f.kby);
-    if (f.action === 'hitstun' && kb > 500 && f.hitstop === 0 && this.frameCount % 2 === 0) {
-      this.effects.trail(f.x, f.y - 35, slotColor(this.setup, f.id), kb > 1300);
+    if (f.action === 'hitstun' && kb > 500 && f.hitstop === 0) {
+      // Directional speed lines every frame, smoke puffs every other frame.
+      const color = slotColor(this.setup, f.id);
+      this.effects.streak(f.x + (Math.random() - 0.5) * 24, f.y - 35 + (Math.random() - 0.5) * 30, f.kbx + f.vx, f.kby + f.vy, kb > 1300 ? color : 0xffffff);
+      if (this.frameCount % 2 === 0) this.effects.trail(f.x, f.y - 35, color, kb > 1300);
     }
     const move = f.move ? FIGHTERS[f.fighter].moves[f.move] : null;
     if (move?.behavior?.type === 'rocket' && f.action === 'attack') {
@@ -380,7 +383,12 @@ export class BattleScene extends Phaser.Scene {
         break;
       case 'land':
         sound.land();
-        this.effects.dust(e.x, e.y, 3);
+        if (e.hard) {
+          this.effects.landImpact(e.x, e.y, 1000);
+          this.cameras.main.shake(90, 0.003);
+        } else {
+          this.effects.dust(e.x, e.y, 3);
+        }
         break;
       case 'attack':
         if (e.slot === 'heavy') sound.heavy();
@@ -413,9 +421,10 @@ export class BattleScene extends Phaser.Scene {
         break;
       case 'hit': {
         sound.hit(e.launchSpeed);
-        this.effects.hit(e.x, e.y, e.launchSpeed, slotColor(this.setup, e.attacker));
+        this.effects.hit(e.x, e.y, e.launchSpeed, slotColor(this.setup, e.attacker), e.launchX, e.launchY);
+        // Shake only for heavier hits, and keep it subtle so the action stays readable.
         const strength = Math.min(1, e.launchSpeed / 2000);
-        if (strength > 0.25) this.cameras.main.shake(80 + strength * 220, 0.002 + strength * 0.01);
+        if (strength > 0.35) this.cameras.main.shake(60 + strength * 160, 0.002 + strength * 0.005);
         this.cards[e.victim].shake = 6 + strength * 18;
         break;
       }
@@ -423,7 +432,7 @@ export class BattleScene extends Phaser.Scene {
         sound.ko();
         const color = slotColor(this.setup, e.id);
         this.effects.ko(e.x, e.y, color, 0, -200);
-        this.cameras.main.shake(450, 0.02);
+        this.cameras.main.shake(380, 0.012);
         this.cameras.main.flash(120, 255, 255, 255);
         this.cards[e.id].shake = 30;
         break;

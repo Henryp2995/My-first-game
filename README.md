@@ -129,7 +129,7 @@ When you and the CPU pick the same fighter, the CPU wears an alternate costume.
 | Stage | Layout |
 |---|---|
 | **Skyfall Arena** | Floating island with two soft platforms (the original stage) |
-| **Corneria** | A long starship over a city. The deck steps down at the nose and up at the rear deck; there's a soft platform on a sensor mast and one on the tail fin. No hazards. |
+| **Corneria** | A long carrier above planet Corneria. The sky is painted art cropped from the stage concept board (`assets/references/corneria-reference.png`, using `tools/stages/crop-backdrop.mjs`). The ship is drawn in code in the board's style. The deck steps down at the nose and up at the rear deck; there's a soft platform on a sensor mast and one on the tail fin. No hazards. |
 | **Final Destination** | One wide, flat, symmetrical platform in deep space. No platforms, no hazards. |
 
 Stages are pure data (`packages/shared/src/stage.ts`). Each one defines:

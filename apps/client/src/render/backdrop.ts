@@ -5,7 +5,7 @@ import { GAME_HEIGHT, GAME_WIDTH } from '../theme';
 /** Vertical sky gradients per stage theme (color stops top → bottom). */
 export const SKY_GRADIENTS: Record<StageTheme, [number, string][]> = {
   skyfall: [[0, '#2b1f7a'], [0.35, '#6a4cf0'], [0.62, '#ff86c2'], [0.82, '#ffc98f'], [1, '#ffe9b8']],
-  corneria: [[0, '#0f3a8c'], [0.4, '#2f7fe0'], [0.7, '#7cc4ff'], [0.9, '#cfeaff'], [1, '#eef8ff']],
+  corneria: [[0, '#000c24'], [0.32, '#06305f'], [0.5, '#164379'], [0.68, '#4288b0'], [0.85, '#9cc4dc'], [1, '#dbe9f3']],
   final: [[0, '#04020c'], [0.4, '#140a33'], [0.7, '#2c1259'], [0.88, '#4b1c6e'], [1, '#22103c']],
 };
 
@@ -34,6 +34,17 @@ function rand(seed: number): () => number {
   };
 }
 
+/** Painted stage art cropped from concept boards (tools/stages/crop-backdrop.mjs). Loaded at boot if present. */
+export const STAGE_ART: Partial<Record<StageTheme, { key: string; url: string }>> = {
+  corneria: { key: 'stage-corneria-backdrop', url: 'assets/stages/corneria/backdrop.png' },
+};
+
+export function preloadStageArt(scene: Phaser.Scene): void {
+  for (const art of Object.values(STAGE_ART)) {
+    if (art && !scene.textures.exists(art.key)) scene.load.image(art.key, art.url);
+  }
+}
+
 /**
  * Parallax background for a stage theme (sky gradient plus themed layers).
  * Layers are drawn in "screen space at the default camera scroll" (sx0, sy0); scroll factors make them parallax.
@@ -44,6 +55,8 @@ export class Backdrop {
   private islands: { obj: Phaser.GameObjects.Graphics; baseY: number; phase: number }[] = [];
   private ships: { obj: Phaser.GameObjects.Graphics; speed: number; baseX: number; span: number }[] = [];
   private pulses: { obj: Phaser.GameObjects.Graphics; phase: number }[] = [];
+  /** Painted bands pinned to the top of the screen regardless of camera zoom. */
+  private screenLocked: { obj: Phaser.GameObjects.Image; base: number }[] = [];
   private t = 0;
 
   constructor(private scene: Phaser.Scene, private sx0 = 0, private sy0 = 0, theme: StageTheme = 'skyfall') {
@@ -82,47 +95,95 @@ export class Backdrop {
     this.addCloudLayer(0.45, 0.85, 4, r, 0xffffff);
   }
 
-  /** Futuristic city skyline under a bright sky, with ships flying past. */
+  /**
+   * Corneria (from the stage concept board): the board's painted band — planet, fighters, carrier
+   * tower — pinned across the top of the screen, over a deep-space gradient, a cloud bank, a
+   * distant fleet and fighter fly-bys drawn in the same palette.
+   */
   private buildCorneria(): void {
     const r = rand(11);
-    this.addCloudLayer(0.06, 0.6, 5, r, 0xffffff);
-    const skyline = (sf: number, baseY: number, color: number, windowColor: number, minH: number, maxH: number) => {
+    const stars = this.layer(0.02);
+    for (let i = 0; i < 160; i++) {
+      stars.fillStyle(0xffffff, 0.3 + r() * 0.7);
+      stars.fillCircle(-900 + r() * 3100, -700 + r() * 900, r() < 0.12 ? 1.8 : 1);
+    }
+    const art = STAGE_ART.corneria;
+    if (art && this.scene.textures.exists(art.key)) {
+      const img = this.scene.add.image(GAME_WIDTH / 2, 0, art.key).setOrigin(0.5, 0).setScrollFactor(0);
+      const base = (GAME_WIDTH * 1.04) / img.width;
+      img.setScale(base);
+      this.objects.push(img);
+      this.screenLocked.push({ obj: img, base });
+    }
+    // Distant capital ships hanging in the haze.
+    const fleet = this.layer(0.1);
+    for (let i = 0; i < 7; i++) {
+      const x = -900 + i * 520 + r() * 200;
+      const y = 300 + r() * 50;
+      const L = 140 + r() * 160;
+      fleet.fillStyle(0x3e5a86, 0.85);
+      fleet.fillPoints([{ x, y }, { x: x + L, y: y - 6 }, { x: x + L + 30, y: y + 4 }, { x: x + L, y: y + 16 }, { x: x + 10, y: y + 14 }], true);
+      fleet.fillRect(x + L * 0.55, y - 22, 18, 22);
+      fleet.fillRect(x + L * 0.6, y - 34, 6, 14);
+      fleet.fillStyle(0x54effc, 0.8);
+      for (let k = 0; k < 5; k++) fleet.fillRect(x + 20 + k * (L / 6), y + 5, 6, 2);
+    }
+    // Cloud sea beneath the fortress: lit cloud tops that darken with depth (board palette).
+    const bank = (sf: number, baseY: number, top: number, deep: number) => {
       const g = this.layer(sf);
-      let x = -1600;
-      while (x < 3000) {
-        const w = 40 + r() * 90;
-        const h = minH + r() * (maxH - minH);
-        g.fillStyle(color, 1);
-        g.fillRect(x, baseY - h, w, h + 900);
-        if (r() < 0.35) {
-          // spire
-          g.fillTriangle(x + w * 0.3, baseY - h, x + w * 0.7, baseY - h, x + w * 0.5, baseY - h - 40 - r() * 60);
-        }
-        g.fillStyle(windowColor, 0.55);
-        for (let wy = baseY - h + 12; wy < baseY; wy += 18) {
-          for (let wx = x + 8; wx < x + w - 8; wx += 14) if (r() < 0.6) g.fillRect(wx, wy, 6, 8);
-        }
-        x += w + 6 + r() * 30;
+      // Depth gradient under the cloud tops.
+      const bands = 56;
+      for (let i = 0; i < bands; i++) {
+        const t = i / (bands - 1);
+        const c = Phaser.Display.Color.Interpolate.ColorWithColor(
+          Phaser.Display.Color.ValueToColor(top), Phaser.Display.Color.ValueToColor(deep), 100, Math.round(t * 100));
+        g.fillStyle(Phaser.Display.Color.GetColor(c.r, c.g, c.b), 1);
+        g.fillRect(-1600, baseY + 10 + i * 10, 4800, 11);
+      }
+      g.fillStyle(deep, 1);
+      g.fillRect(-1600, baseY + 10 + bands * 10, 4800, 900);
+      // Billowing tops with a lit upper edge and soft shadowed undersides.
+      for (let x = -1600; x < 3200; x += 60 + r() * 60) {
+        const k = 0.7 + r() * 0.9;
+        const y = baseY + r() * 24;
+        g.fillStyle(deep, 0.35);
+        g.fillEllipse(x + 10 * k, y + 18 * k, 190 * k, 60 * k);
+        g.fillStyle(top, 1);
+        g.fillEllipse(x, y, 180 * k, 70 * k);
+        g.fillEllipse(x + 40 * k, y - 22 * k, 120 * k, 60 * k);
+        g.fillStyle(0xffffff, 0.55);
+        g.fillEllipse(x + 30 * k, y - 34 * k, 70 * k, 22 * k);
       }
     };
-    skyline(0.1, 560, 0x6f9fd8, 0xdff4ff, 120, 260);
-    skyline(0.2, 640, 0x3f6fae, 0xffe9a0, 80, 220);
-    // Ships cruising across the sky (visual only — no hazards).
+    bank(0.14, 400, 0xc7dbee, 0x5d86b4);
+    bank(0.24, 480, 0xe9f1f9, 0x7aa0c8);
+    // Fighters streaking past (visual only — no hazards).
     for (let i = 0; i < 4; i++) {
-      const g = this.layer(0.3);
-      const y = 80 + r() * 220;
+      const g = this.layer(0.32);
+      const y = 120 + r() * 200;
       const x = -400 + r() * 2000;
       const s = 0.6 + r() * 0.6;
-      g.fillStyle(0xe8eef8, 1);
-      g.fillTriangle(x, y, x - 46 * s, y - 10 * s, x - 46 * s, y + 10 * s);
-      g.fillStyle(0x2f7fe0, 1);
-      g.fillTriangle(x - 20 * s, y, x - 52 * s, y - 26 * s, x - 40 * s, y);
-      g.fillTriangle(x - 20 * s, y, x - 52 * s, y + 26 * s, x - 40 * s, y);
-      g.fillStyle(0xffb347, 0.9);
-      g.fillCircle(x - 48 * s, y, 4 * s);
-      this.ships.push({ obj: g, speed: 140 + r() * 120, baseX: g.x, span: 3600 });
+      g.fillStyle(0x54a8ff, 0.35);
+      g.fillTriangle(x - 40 * s, y - 4 * s, x - 40 * s, y + 4 * s, x - 150 * s, y);
+      g.fillStyle(0xeef2f8, 1);
+      g.fillTriangle(x + 26 * s, y, x - 30 * s, y - 7 * s, x - 30 * s, y + 7 * s);
+      g.fillStyle(0xc9d2e0, 1);
+      g.fillTriangle(x - 4 * s, y, x - 34 * s, y - 26 * s, x - 22 * s, y);
+      g.fillTriangle(x - 4 * s, y, x - 34 * s, y + 26 * s, x - 22 * s, y);
+      g.fillStyle(0x2c56b8, 1);
+      g.fillTriangle(x - 26 * s, y - 20 * s, x - 34 * s, y - 26 * s, x - 22 * s, y - 8 * s);
+      g.fillStyle(0xbff4ff, 1);
+      g.fillCircle(x - 32 * s, y, 3.5 * s);
+      this.ships.push({ obj: g, speed: 160 + r() * 140, baseX: g.x, span: 3600 });
     }
-    this.addCloudLayer(0.45, 0.8, 3, r, 0xffffff);
+  }
+
+  /** Keep screen-pinned painted bands filling the top of the screen at any camera zoom. */
+  setZoom(zoom: number): void {
+    for (const { obj, base } of this.screenLocked) {
+      obj.setScale(base / zoom);
+      obj.y = GAME_HEIGHT / 2 - GAME_HEIGHT / 2 / zoom;
+    }
   }
 
   /** Deep space: stars, nebulae, a ringed planet and slow light ribbons. */
@@ -336,76 +397,127 @@ function drawSkyfall(g: Phaser.GameObjects.Graphics, stage: StageDef): void {
   }
 }
 
-function softPlatform(g: Phaser.GameObjects.Graphics, x1: number, x2: number, y: number, top: number, body: number, glow: number): void {
-  g.fillStyle(glow, 0.12);
-  g.fillTriangle(x1 + 10, y + 12, x2 - 10, y + 12, (x1 + x2) / 2, y + 110);
-  g.fillStyle(body, 0.95);
-  g.fillRoundedRect(x1, y, x2 - x1, 14, 6);
-  g.fillStyle(top, 1);
-  g.fillRoundedRect(x1 - 2, y - 3, x2 - x1 + 4, 6, 3);
-}
-
-/** A long starship. The hull is decoration; the deck tops line up exactly with the collision platforms. */
+/**
+ * The Corneria carrier, styled after the stage concept board: white armor plating with panel
+ * lines, red accent stripes, cyan running lights and blue engines. The deck tops line up exactly
+ * with the collision platforms (the layout is unchanged).
+ */
 function drawCorneria(g: Phaser.GameObjects.Graphics, stage: StageDef): void {
   const P = Object.fromEntries(stage.platforms.map((p) => [p.id, p]));
   const nose = P.nose;
   const deck = P.deck;
   const rear = P.rear;
-  // Wing (behind the hull)
-  g.fillStyle(0x3e4c66, 1);
-  g.fillPoints([{ x: -260, y: 70 }, { x: 380, y: 70 }, { x: 640, y: 210 }, { x: 140, y: 175 }], true);
-  g.fillStyle(0x2f7fe0, 1);
-  g.fillPoints([{ x: 560, y: 168 }, { x: 640, y: 210 }, { x: 590, y: 212 }], true);
-  // Tail fin rising behind the rear deck
   const fin = P.fin;
-  g.fillStyle(0x4a5a7a, 1);
-  g.fillPoints([{ x: rear.x1 + 30, y: rear.y }, { x: fin.x1 + 10, y: fin.y + 8 }, { x: fin.x2, y: fin.y + 8 }, { x: rear.x2, y: rear.y }], true);
-  g.fillStyle(0x2f7fe0, 1);
-  g.fillPoints([{ x: fin.x1 + 30, y: fin.y + 40 }, { x: fin.x2 - 10, y: fin.y + 40 }, { x: fin.x2 + 10, y: rear.y - 40 }, { x: fin.x1 + 50, y: rear.y - 40 }], true);
+  const cp = P.cockpit;
+  const ARMOR = 0xdfe4ec;
+  const ARMOR_MID = 0xb9c1ce;
+  const ARMOR_DARK = 0x7f899c;
+  const UNDER = 0x4a5268;
+  const LINE = 0x9aa3b4;
+  const RED = 0xd23a3a;
+  const CYAN = 0x54effc;
+  const lights = (x1: number, x2: number, y: number, w = 22, gap = 40) => {
+    for (let x = x1; x < x2 - w; x += gap) {
+      g.fillStyle(CYAN, 0.25);
+      g.fillRect(x - 3, y - 3, w + 6, 10);
+      g.fillStyle(CYAN, 1);
+      g.fillRect(x, y, w, 4);
+    }
+  };
+
+  // Swept wing behind the hull
+  g.fillStyle(ARMOR_DARK, 1);
+  g.fillPoints([{ x: -260, y: 70 }, { x: 380, y: 70 }, { x: 660, y: 215 }, { x: 140, y: 180 }], true);
+  g.fillStyle(ARMOR_MID, 1);
+  g.fillPoints([{ x: -200, y: 70 }, { x: 360, y: 70 }, { x: 560, y: 160 }, { x: 120, y: 140 }], true);
+  g.fillStyle(RED, 1);
+  g.fillPoints([{ x: 520, y: 140 }, { x: 660, y: 215 }, { x: 610, y: 215 }, { x: 490, y: 150 }], true);
+
+  // Tail fin rising behind the rear deck: white with a red leading edge and emblem.
+  g.fillStyle(ARMOR_DARK, 1);
+  g.fillPoints([{ x: rear.x1 + 26, y: rear.y }, { x: fin.x1 + 8, y: fin.y + 10 }, { x: fin.x2 + 4, y: fin.y + 10 }, { x: rear.x2 + 4, y: rear.y }], true);
+  g.fillStyle(ARMOR, 1);
+  g.fillPoints([{ x: rear.x1 + 34, y: rear.y }, { x: fin.x1 + 14, y: fin.y + 14 }, { x: fin.x2 - 2, y: fin.y + 14 }, { x: rear.x2 - 4, y: rear.y }], true);
+  g.fillStyle(RED, 1);
+  g.fillPoints([{ x: rear.x1 + 34, y: rear.y }, { x: fin.x1 + 14, y: fin.y + 14 }, { x: fin.x1 + 34, y: fin.y + 14 }, { x: rear.x1 + 58, y: rear.y }], true);
+  const ex = (fin.x1 + fin.x2) / 2 + 12;
+  const ey = (fin.y + rear.y) / 2;
+  g.fillStyle(RED, 1);
+  g.fillTriangle(ex - 30, ey + 16, ex + 26, ey - 22, ex + 4, ey + 2);
+  g.fillTriangle(ex - 10, ey + 22, ex + 34, ey - 6, ex + 8, ey + 10);
+  g.lineStyle(2, LINE, 1);
+  g.lineBetween(fin.x1 + 30, fin.y + 60, fin.x2 - 6, fin.y + 60);
+
   // Hull body
   const hull = [
     { x: nose.x1 - 90, y: nose.y + 30 }, { x: nose.x1, y: nose.y }, { x: nose.x2, y: nose.y }, { x: deck.x1, y: deck.y },
     { x: deck.x2, y: deck.y }, { x: rear.x1, y: rear.y }, { x: rear.x2, y: rear.y }, { x: rear.x2 + 50, y: rear.y + 30 },
     { x: rear.x2 + 70, y: 90 }, { x: rear.x2 + 10, y: 160 }, { x: -200, y: 200 }, { x: -600, y: 160 }, { x: nose.x1 - 70, y: 100 },
   ];
-  g.fillStyle(0x7d8ba3, 1);
+  g.fillStyle(ARMOR_MID, 1);
   g.fillPoints(hull, true);
-  g.fillStyle(0x56627a, 1);
+  // Upper armor band, lower hull and dark underside
+  g.fillStyle(ARMOR, 1);
+  g.fillPoints([{ x: nose.x1 - 90, y: nose.y + 30 }, { x: nose.x1, y: nose.y }, { x: nose.x2, y: nose.y }, { x: deck.x1, y: deck.y },
+    { x: deck.x2, y: deck.y }, { x: rear.x1, y: rear.y }, { x: rear.x2, y: rear.y }, { x: rear.x2 + 50, y: rear.y + 30 },
+    { x: rear.x2 + 56, y: 48 }, { x: -600, y: 52 }, { x: nose.x1 - 78, y: 70 }], true);
+  g.fillStyle(UNDER, 1);
   g.fillPoints([{ x: nose.x1 - 70, y: 100 }, { x: rear.x2 + 70, y: 90 }, { x: rear.x2 + 10, y: 160 }, { x: -200, y: 200 }, { x: -600, y: 160 }], true);
-  // Panel seams and windows
-  g.lineStyle(2, 0x5f6b82, 1);
-  for (let x = -520; x < 460; x += 90) g.lineBetween(x, 20, x - 20, 150);
-  g.fillStyle(0x9ae8ff, 0.9);
-  for (let x = -480; x < 420; x += 34) g.fillRect(x, 54, 16, 8);
+  g.fillStyle(0x363d52, 1);
+  g.fillPoints([{ x: -560, y: 150 }, { x: rear.x2 - 20, y: 135 }, { x: rear.x2 + 10, y: 160 }, { x: -200, y: 200 }], true);
+  // Armor plate seams
+  g.lineStyle(2, LINE, 1);
+  for (let x = -520; x < 470; x += 85) g.lineBetween(x, 8, x - 12, 50);
+  for (let x = -540; x < 460; x += 120) g.lineBetween(x, 58, x - 18, 98);
+  g.lineBetween(-600, 52, rear.x2 + 56, 48);
+  // Red accent stripes (bow and stern)
+  g.fillStyle(RED, 1);
+  g.fillPoints([{ x: nose.x1 - 84, y: nose.y + 34 }, { x: nose.x1 + 40, y: nose.y + 34 }, { x: nose.x1 + 20, y: nose.y + 46 }, { x: nose.x1 - 74, y: nose.y + 50 }], true);
+  g.fillPoints([{ x: rear.x1 + 40, y: 56 }, { x: rear.x2 + 54, y: 52 }, { x: rear.x2 + 56, y: 62 }, { x: rear.x1 + 30, y: 66 }], true);
+  // Cyan running lights
+  lights(-520, 230, 76, 26, 62);
+  lights(nose.x1 - 40, nose.x2 - 10, nose.y + 62, 16, 34);
+  lights(rear.x1 + 20, rear.x2 + 20, 76, 20, 46);
   // Engines
-  for (const [ey, er] of [[10, 22], [62, 26], [112, 20]] as const) {
+  for (const [ey2, er] of [[12, 22], [64, 26], [114, 20]] as const) {
     g.fillStyle(0x2a3244, 1);
-    g.fillCircle(rear.x2 + 62, ey, er + 6);
-    g.fillStyle(0x6fd8ff, 0.5);
-    g.fillCircle(rear.x2 + 66, ey, er + 2);
-    g.fillStyle(0xe8fbff, 1);
-    g.fillCircle(rear.x2 + 66, ey, er * 0.55);
+    g.fillCircle(rear.x2 + 62, ey2, er + 6);
+    g.fillStyle(0x3f8cff, 0.45);
+    g.fillCircle(rear.x2 + 68, ey2, er + 10);
+    g.fillStyle(0x9ae8ff, 0.9);
+    g.fillCircle(rear.x2 + 66, ey2, er * 0.75);
+    g.fillStyle(0xffffff, 1);
+    g.fillCircle(rear.x2 + 66, ey2, er * 0.4);
   }
-  // Deck surfaces (exactly on the collision tops) with hazard-striped step edges
+  // Deck surfaces (exactly on the collision tops): raised armor plates with lit step edges.
   for (const p of [nose, deck, rear]) {
-    g.fillStyle(0xc9d3e3, 1);
+    g.fillStyle(ARMOR_DARK, 1);
+    g.fillRect(p.x1, p.y + 6, p.x2 - p.x1, 6);
+    g.fillStyle(0xf4f6fa, 1);
     g.fillRect(p.x1, p.y - 2, p.x2 - p.x1, 8);
-    g.fillStyle(0xe8eef8, 1);
-    g.fillRect(p.x1 + 4, p.y - 2, p.x2 - p.x1 - 8, 3);
-    for (const ex of [p.x1, p.x2 - 18]) {
+    g.lineStyle(1.5, LINE, 1);
+    for (let x = p.x1 + 60; x < p.x2 - 20; x += 60) g.lineBetween(x, p.y - 2, x, p.y + 6);
+    for (const exx of [p.x1, p.x2 - 18]) {
       for (let k = 0; k < 3; k++) {
         g.fillStyle(k % 2 ? 0x1a1a1a : 0xffc93c, 1);
-        g.fillRect(ex + k * 6, p.y + 6, 6, 6);
+        g.fillRect(exx + k * 6, p.y + 6, 6, 6);
       }
     }
   }
-  // Sensor mast holding the floating cockpit platform
-  const cp = P.cockpit;
-  g.lineStyle(6, 0x56627a, 1);
-  g.lineBetween((cp.x1 + cp.x2) / 2 - 40, cp.y + 10, (cp.x1 + cp.x2) / 2 - 60, deck.y);
-  g.lineBetween((cp.x1 + cp.x2) / 2 + 40, cp.y + 10, (cp.x1 + cp.x2) / 2 + 60, deck.y);
-  softPlatform(g, cp.x1, cp.x2, cp.y, 0x9ae8ff, 0x3e4c66, 0x9ae8ff);
-  softPlatform(g, fin.x1, fin.x2, fin.y, 0xffc93c, 0x3e4c66, 0xffc93c);
+  // Sensor mast and the two hover platforms (gray slabs with cyan underglow, like the board's).
+  g.lineStyle(6, ARMOR_DARK, 1);
+  g.lineBetween((cp.x1 + cp.x2) / 2 - 40, cp.y + 12, (cp.x1 + cp.x2) / 2 - 60, deck.y);
+  g.lineBetween((cp.x1 + cp.x2) / 2 + 40, cp.y + 12, (cp.x1 + cp.x2) / 2 + 60, deck.y);
+  for (const p of [cp, fin]) {
+    g.fillStyle(CYAN, 0.12);
+    g.fillTriangle(p.x1 + 10, p.y + 14, p.x2 - 10, p.y + 14, (p.x1 + p.x2) / 2, p.y + 110);
+    g.fillStyle(0x5d6578, 1);
+    g.fillRoundedRect(p.x1, p.y + 2, p.x2 - p.x1, 14, 5);
+    g.fillStyle(0xeef1f6, 1);
+    g.fillRoundedRect(p.x1 - 3, p.y - 3, p.x2 - p.x1 + 6, 7, 3);
+    g.fillStyle(CYAN, 1);
+    g.fillRect(p.x1 + 12, p.y + 12, p.x2 - p.x1 - 24, 3);
+  }
 }
 
 /** One wide, symmetrical floating slab with glowing edges. */
@@ -485,20 +597,22 @@ export function drawStagePreview(scene: Phaser.Scene, stage: StageDef, cx: numbe
     bg.fillStyle(0x2bd8c8, 0.12);
     bg.fillCircle(cx + w * 0.3, cy + h * 0.1, h * 0.3);
   } else if (stage.theme === 'corneria') {
-    let x = cx - w / 2;
-    while (x < cx + w / 2 - 10) {
-      const bw = 10 + r() * 22;
-      const bh = h * (0.15 + r() * 0.3);
-      bg.fillStyle(0x4f80c0, 1);
-      bg.fillRect(x, cy + h / 2 - bh, bw, bh);
-      x += bw + 2;
-    }
+    bg.fillStyle(0xf2f6fb, 0.95);
+    bg.fillRect(cx - w / 2, cy + h * 0.2, w, h * 0.3);
+    for (let x = cx - w / 2; x < cx + w / 2; x += 26) bg.fillEllipse(x, cy + h * 0.2, 46, 20);
   } else {
     bg.fillStyle(0x9a7be0, 1);
     for (let i = 0; i < 6; i++) {
       const mx = cx - w / 2 + (i + 0.5) * (w / 6);
       bg.fillTriangle(mx - w / 8, cy + h / 2, mx + w / 8, cy + h / 2, mx, cy + h / 2 - h * (0.25 + r() * 0.2));
     }
+  }
+  // Painted concept-board band across the top, when this stage has one.
+  const painted = STAGE_ART[stage.theme];
+  let band: Phaser.GameObjects.Image | null = null;
+  if (painted && scene.textures.exists(painted.key)) {
+    band = scene.add.image(cx, cy - h / 2, painted.key).setOrigin(0.5, 0);
+    band.setScale(w / band.width);
   }
   // Platforms: the real stage art, scaled to fit.
   const art = drawStage(scene, stage, { blastLines: false });
@@ -518,6 +632,7 @@ export function drawStagePreview(scene: Phaser.Scene, stage: StageDef, cx: numbe
   maskShape.fillRect(cx - w / 2, cy - h / 2, w, h);
   const mask = maskShape.createGeometryMask();
   bg.setMask(mask);
+  band?.setMask(mask);
   art.setMask(mask);
-  return [bg, art];
+  return band ? [bg, band, art] : [bg, art];
 }

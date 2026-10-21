@@ -518,5 +518,6 @@ export class BattleScene extends Phaser.Scene {
     this.cam.zoom += (tz - this.cam.zoom) * k;
     main.setZoom(this.cam.zoom);
     main.centerOn(this.cam.x, this.cam.y);
+    this.backdrop.setZoom(this.cam.zoom);
   }
 }

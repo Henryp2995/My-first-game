@@ -397,18 +397,26 @@ export class BattleScene extends Phaser.Scene {
           this.effects.dust(e.x, e.y, 3);
         }
         break;
-      case 'attack':
-        if (e.slot === 'heavy') sound.heavy();
-        else if (e.slot === 'special') {
-          const who = fighters[e.id].fighter;
+      case 'attack': {
+        const who = fighters[e.id].fighter;
+        const saberUser = who === 'gundam' || who === 'vader';
+        if (e.slot === 'special') {
           if (who === 'gnw') sound.special('judge');
           else if (who === 'goku') sound.beamCharge();
           else if (who === 'naruto') sound.rasengan();
-        } else sound.light();
+          else if (who === 'vader') sound.choke();
+        } else if (saberUser) sound.saber();
+        else if (e.slot === 'heavy') sound.heavy();
+        else sound.light();
         break;
+      }
       case 'projectile':
         if (e.kind === 'web') sound.web();
         else if (e.kind === 'batarang') sound.batarang();
+        else if (e.kind === 'rifle') {
+          sound.rifle();
+          this.effects.burst(e.x, e.y, 0xff5fd2);
+        }
         else {
           sound.beamFire(e.charge);
           this.cameras.main.shake(160 + e.charge * 200, 0.003 + e.charge * 0.004);

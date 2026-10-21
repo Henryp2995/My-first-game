@@ -3,7 +3,7 @@ import type { FighterAction, FighterId, MoveDef } from '@arena-rush/shared';
 /** [upper segment angle, bend]. Angles are radians from straight down; positive swings forward. */
 export type Limb = [number, number];
 
-export type PropKind = 'hammer' | 'judge' | 'key' | null;
+export type PropKind = 'hammer' | 'judge' | 'key' | 'saber' | 'rifle' | null;
 
 export interface Pose {
   lean: number;
@@ -109,6 +109,19 @@ function idle(id: FighterId, t: number): Pose {
       armF: [0.95, 1.6], armB: [0.4, 1.5], legF: [0.5, 0.7], legB: [-0.45, 0.4],
     });
   }
+  if (id === 'gundam') {
+    return P({
+      lean: 0.04, bob: b * 0.8,
+      armF: [0.45, 0.9], armB: [-0.15, 0.7], legF: [0.3, 0.12], legB: [-0.32, 0.1],
+    });
+  }
+  if (id === 'vader') {
+    // Upright and menacing, lit saber held low and forward.
+    return P({
+      lean: 0.02, bob: b * 0.6,
+      armF: [0.6, 0.45], armB: [-0.18, 0.35], legF: [0.32, 0.1], legB: [-0.32, 0.08], prop: 'saber', flare: 0.15,
+    });
+  }
   if (id === 'goku') {
     return P({
       lean: 0.12, bob: 3 + b * 1.2,
@@ -150,6 +163,13 @@ function run(id: FighterId, t: number, speedRatio: number): Pose {
     pose.bob += 4;
   }
   if (id === 'batman') pose.flare = 0.6 * speedRatio;
+  if (id === 'vader') {
+    pose.flare = 0.5 * speedRatio;
+    pose.prop = 'saber';
+    pose.armF = [0.5 - Math.sin(p) * 0.3, 0.5];
+    pose.lean = 0.1 * speedRatio;
+  }
+  if (id === 'gundam') pose.lean = 0.12 * speedRatio;
   if (id === 'luigi') {
     pose.armF = [-s * 1.1 + 0.2, 1.4];
     pose.armB = [s * 1.1 + 0.2, 1.4];
@@ -204,6 +224,13 @@ function victory(id: FighterId, t: number): Pose {
   if (id === 'naruto') {
     const wave = Math.sin(t * 0.12);
     return P({ armF: [1.7 + wave * 0.1, 1.5], armB: [-0.4, 0.6], legF: [0.3, 0.1], legB: [-0.35, 0.1], expression: 'happy', lean: -0.05 });
+  }
+  if (id === 'gundam') {
+    return P({ armF: [2.95, 0.1], armB: [-0.3, 0.6], legF: [0.35, 0.1], legB: [-0.35, 0.1], prop: 'saber', lean: -0.05 });
+  }
+  if (id === 'vader') {
+    const b2 = Math.sin(t * 0.04);
+    return P({ armF: [1.7, 0.25 + b2 * 0.05], armB: [0.3, 0.4], legF: [0.32, 0.1], legB: [-0.32, 0.08], flare: 0.3 + b2 * 0.05 });
   }
   if (id === 'goku') {
     const hop = Math.abs(Math.sin(t * 0.07));
@@ -401,6 +428,41 @@ function attack(a: AnimInput, rest: Pose): Pose {
       return keyed(ph, rest,
         P({ bob: 7, lean: -0.15, armF: [-0.9, 2.2], armB: [-1.0, 2.25], legF: [0.6, 0.8], legB: [-0.55, 0.5], expression: 'focus' }),
         P({ lean: 0.25, armF: [1.57, 0], armB: [1.5, 0.05], legF: [0.65, 0.4], legB: [-0.6, 0.2], expression: 'focus' }));
+    // ---- Saber fighters ----
+    case 'gundam-saber':
+    case 'vader-slash': {
+      const s1 = move.hitboxes[0].start ?? move.startup;
+      const s2 = move.hitboxes[1]?.start ?? s1 + 6;
+      const stance = P({ lean: 0.18, legF: [0.5, 0.35], legB: [-0.45, 0.15], prop: 'saber', flare: 0.4 });
+      if (fr < s1) return mix(rest, P({ ...stance, armF: [2.6, 0.3] }), ease(clamp01(fr / s1)));
+      if (fr < s2 - 1) return P({ ...stance, armF: [0.85, 0.1], lean: 0.3 });
+      if (fr < s2 + 4) return P({ ...stance, armF: [2.2, 0.1], armB: [-0.6, 0.5], lean: 0.1 });
+      return mix(P({ ...stance, armF: [2.2, 0.1] }), rest, ease(clamp01((fr - s2 - 4) / Math.max(1, move.recovery))));
+    }
+    case 'gundam-overhead':
+    case 'vader-cleave':
+      return keyed(ph, rest,
+        P({ armF: [3.05, 0.1], armB: [2.6, 0.3], lean: -0.22, prop: 'saber', flare: 0.2, legF: [0.4, 0.3], legB: [-0.4, 0.2] }),
+        P({ armF: [1.0, 0], armB: [0.7, 0.3], lean: 0.38, prop: 'saber', flare: 1, legF: [0.7, 0.5], legB: [-0.6, 0.2], expression: 'focus' }));
+    case 'gundam-rifle':
+      return keyed(ph, rest,
+        P({ armF: [1.2, 0.5], armB: [-0.2, 0.7], lean: 0.05, prop: 'rifle' }),
+        P({ armF: [1.57, 0], armB: [-0.3, 0.7], lean: 0.12, prop: 'rifle', legF: [0.45, 0.3], legB: [-0.45, 0.15] }));
+    case 'gundam-plunge':
+      return keyed(ph, rest,
+        P({ armF: [2.6, 0.2], legF: [1.0, 1.6], legB: [0.6, 1.4], prop: 'saber' }),
+        P({ armF: [0.05, 0], armB: [-0.6, 0.6], legF: [0.9, 1.5], legB: [0.5, 1.3], lean: 0.15, prop: 'saber' }));
+    case 'vader-choke':
+      return keyed(ph, rest,
+        P({ armF: [0.9, 1.2], armB: [-0.2, 0.4], lean: -0.05, flare: 0.2 }),
+        P({ armF: [1.75, 0.25], armB: [-0.25, 0.35], lean: -0.1, flare: 0.5, legF: [0.35, 0.1], legB: [-0.35, 0.1] }));
+    case 'vader-spin': {
+      const pose = keyed(ph, rest,
+        P({ armF: [2.2, 0.3], legF: [0.9, 1.5], legB: [0.5, 1.3], prop: 'saber', flare: 0.6 }),
+        P({ armF: [1.3, 0], armB: [-1.4, 0.2], legF: [0.6, 0.9], legB: [-0.2, 0.8], prop: 'saber', flare: 1, lean: 0.2 }));
+      if (ph.name === 'active') pose.flip = Math.floor(fr / 3) % 2 === 1;
+      return pose;
+    }
     default:
       return keyed(ph, rest, P({ armF: [-0.5, 1.2] }), P({ armF: [1.57, 0] }));
   }
@@ -409,7 +471,7 @@ function attack(a: AnimInput, rest: Pose): Pose {
 export function computePose(a: AnimInput): Pose {
   const pose = computeBasePose(a);
   // Capes trail behind when moving fast or flying.
-  if (a.fighter === 'batman' && (a.action === 'air' || a.action === 'hitstun')) {
+  if ((a.fighter === 'batman' || a.fighter === 'vader') && (a.action === 'air' || a.action === 'hitstun')) {
     pose.flare = Math.max(pose.flare, Math.min(1, 0.4 + Math.abs(a.vy) / 1500));
   }
   return pose;

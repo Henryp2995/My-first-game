@@ -88,7 +88,21 @@ export class FighterView {
     const fx = this.fxG;
     const move = currentMove(f);
     const t = this.clock;
-    if (f.webbed > 0) {
+    if (f.restrained > 0 && f.restrainKind === 'force') {
+      // Force Choke: dark-red grip at the throat, pulsing aura, dangling.
+      const h = FIGHTERS[f.fighter].stats.height;
+      const pulse = 0.5 + Math.sin(t * 0.4) * 0.3;
+      fx.fillStyle(0x6a0010, 0.18 * pulse + 0.1);
+      fx.fillEllipse(x, y - h * 0.5, 64, h * 1.1);
+      fx.lineStyle(3, 0xff3355, pulse);
+      fx.strokeEllipse(x, y - h * 0.78, 26, 9);
+      fx.lineStyle(1.5, 0xff8899, 0.6);
+      for (let k = 0; k < 3; k++) {
+        const a = t * 0.3 + k * 2.1;
+        fx.lineBetween(x + Math.cos(a) * 30, y - h * 0.5 + Math.sin(a) * 40, x + Math.cos(a) * 18, y - h * 0.5 + Math.sin(a) * 24);
+      }
+    }
+    if (f.restrained > 0 && f.restrainKind === 'web') {
       // Restrained: web strands wrapped around the body.
       fx.lineStyle(2, 0xffffff, 0.9);
       const h = FIGHTERS[f.fighter].stats.height;
@@ -114,6 +128,14 @@ export class FighterView {
       const h = FIGHTERS[f.fighter].stats.height;
       fx.lineStyle(3, 0xffe066, 0.4 + ratio * 0.5);
       fx.strokeEllipse(x, y - h * 0.5, 54 + ratio * 26 + Math.sin(t * 0.8) * 4, h * 1.15 + ratio * 20);
+    }
+    if (move.id === 'vader-choke' && f.actionFrame >= move.startup - 6 && f.actionFrame < move.startup + move.active + 8) {
+      // The Force gathers in his outstretched hand.
+      const r = 7 + Math.sin(t * 0.5) * 2;
+      fx.fillStyle(0xff2a44, 0.25);
+      fx.fillCircle(hand.x, hand.y, r * 2.2);
+      fx.lineStyle(2, 0xff5566, 0.7);
+      fx.strokeCircle(hand.x, hand.y, r + ((t * 2) % 14));
     }
     if (move.id === 'naruto-rasengan' && f.actionFrame < move.startup + move.active) {
       const grow = Math.min(1, f.actionFrame / move.startup);

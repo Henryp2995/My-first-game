@@ -14,8 +14,8 @@ function face(m: ReturnType<typeof setupMatch>, gap = 40) {
 }
 
 describe('character stats', () => {
-  it('defines all seven fighters with all four move slots', () => {
-    expect(FIGHTER_ORDER).toEqual(['gnw', 'luigi', 'sheik', 'spiderman', 'batman', 'naruto', 'goku']);
+  it('defines all nine fighters with all four move slots', () => {
+    expect(FIGHTER_ORDER).toEqual(['gnw', 'luigi', 'sheik', 'spiderman', 'batman', 'naruto', 'goku', 'gundam', 'vader']);
     for (const id of FIGHTER_ORDER) {
       for (const slot of ['light', 'heavy', 'special', 'aerial'] as MoveSlot[]) {
         const move = FIGHTERS[id].moves[slot];

@@ -6,7 +6,7 @@ import {
 } from '../src';
 import { emptyInput, makeInput, run, setupMatch } from './helpers';
 
-const NEW: FighterId[] = ['spiderman', 'batman', 'naruto', 'goku'];
+const NEW: FighterId[] = ['spiderman', 'batman', 'naruto', 'goku', 'gundam', 'vader'];
 
 function onStage(fighters: FighterId[], stage: StageId, seed = 1): MatchState {
   return createMatch(fighters.map((fighter) => ({ fighter })), { rules: makeRules({ countdownFrames: 0 }), stage: getStage(stage), seed });
@@ -30,17 +30,19 @@ function use(m: MatchState, button: 'light' | 'heavy' | 'special', frames: numbe
 }
 
 describe('expanded roster', () => {
-  it('has seven fighters with distinct stat lines', () => {
-    expect(FIGHTER_ORDER).toHaveLength(7);
+  it('has nine fighters with distinct stat lines', () => {
+    expect(FIGHTER_ORDER).toHaveLength(9);
     const signatures = new Set(FIGHTER_ORDER.map((id) => JSON.stringify(FIGHTERS[id].stats)));
-    expect(signatures.size).toBe(7);
+    expect(signatures.size).toBe(9);
   });
 
   it('matches the requested identities', () => {
     const s = (id: FighterId) => FIGHTERS[id].stats;
-    // Batman is the heaviest, G&W the lightest; Spider-Man has the best air speed and double jump.
+    // Gundam is the heaviest, then Batman and Vader; G&W the lightest; Spider-Man has the best air speed and double jump.
+    const heavies: FighterId[] = ['gundam', 'batman', 'vader'];
     for (const id of FIGHTER_ORDER) {
-      if (id !== 'batman') expect(s('batman').weight).toBeGreaterThan(s(id).weight);
+      if (id !== 'gundam') expect(s('gundam').weight).toBeGreaterThan(s(id).weight);
+      if (!heavies.includes(id)) expect(s('vader').weight).toBeGreaterThan(s(id).weight);
       if (id !== 'gnw') expect(s('gnw').weight).toBeLessThan(s(id).weight);
       if (id !== 'spiderman') {
         expect(s('spiderman').airSpeed).toBeGreaterThan(s(id).airSpeed);
@@ -100,7 +102,8 @@ describe('Spider-Man', () => {
     expect(hit && hit.type === 'hit' && hit.projectile).toBe('web');
     expect(v.damage).toBe(3);
     expect(v.action).toBe('hitstun');
-    expect(v.webbed).toBeGreaterThan(20);
+    expect(v.restrained).toBeGreaterThan(20);
+    expect(v.restrainKind).toBe('web');
     // Restrained: barely moves, and can't act until it ends.
     const x0 = v.x;
     let attacked = false;
@@ -112,7 +115,7 @@ describe('Spider-Man', () => {
     expect(attacked).toBe(false);
     expect(Math.abs(v.x - x0)).toBeLessThan(40);
     run(m, 40);
-    expect(v.webbed).toBe(0);
+    expect(v.restrained).toBe(0);
   });
 
   it('Web Shot has a cooldown', () => {
@@ -209,6 +212,71 @@ describe('Goku', () => {
     use(charged, 'heavy', 110, 60);
     expect(quick.fighters[1].damage).toBe(14);
     expect(charged.fighters[1].damage).toBe(20);
+  });
+});
+
+describe('Gundam RX-78', () => {
+  it('thrusters give it three jumps per airtime', () => {
+    const m = setupMatch(['gundam', 'luigi']);
+    m.fighters[0].x = 0;
+    let jumps = 0;
+    let landed = false;
+    for (let i = 0; i < 120 && !landed; i++) {
+      for (const e of stepMatch(m, [makeInput({ jump: i % 10 === 0 }), emptyInput()])) {
+        if (e.type === 'jump' && e.id === 0) jumps++;
+        if (e.type === 'land' && e.id === 0) landed = true;
+      }
+    }
+    expect(landed).toBe(true);
+    expect(jumps).toBe(3); // ground jump + two thruster boosts, then no more until landing
+    expect(FIGHTERS.gundam.stats.maxJumps).toBe(3);
+  });
+
+  it('Beam Rifle is a fast projectile with a cooldown', () => {
+    const m = lineUp('gundam', 'luigi', 520);
+    const ev = use(m, 'special', 40);
+    expect(ev.some((e) => e.type === 'projectile' && e.kind === 'rifle')).toBe(true);
+    expect(ev.some((e) => e.type === 'hit' && e.projectile === 'rifle')).toBe(true);
+    expect(m.fighters[1].damage).toBe(8);
+    expect(use(m, 'special', 5).some((e) => e.type === 'attack' && e.id === 0)).toBe(false);
+  });
+});
+
+describe('Darth Vader', () => {
+  it('Force Choke holds the victim suspended in midair, then lets go', () => {
+    const m = lineUp('vader', 'luigi', 130);
+    const v = m.fighters[1];
+    const ev = use(m, 'special', FIGHTERS.vader.moves.special.startup + 2);
+    expect(ev.some((e) => e.type === 'hit')).toBe(true);
+    expect(v.restrainKind).toBe('force');
+    expect(v.damage).toBe(6);
+    run(m, 6);
+    const y0 = v.y;
+    run(m, 25);
+    expect(v.grounded).toBe(false);
+    expect(v.y).toBeLessThanOrEqual(y0 + 1); // not falling while held
+    expect(Math.abs(v.x - (m.fighters[0].x + 130))).toBeLessThan(25);
+    run(m, 60);
+    expect(v.restrained).toBe(0);
+    expect(v.restrainKind).toBeNull();
+  });
+
+  it('a choked opponent can be followed up with the saber cleave', () => {
+    const m = lineUp('vader', 'luigi', 70);
+    const move = FIGHTERS.vader.moves.special;
+    use(m, 'special', moveTotalFrames(move) + 3);
+    expect(m.fighters[1].restrained).toBeGreaterThan(0);
+    m.fighters[0].x = m.fighters[1].x - 55;
+    const ev = use(m, 'heavy', 30);
+    expect(ev.some((e) => e.type === 'hit' && e.attacker === 0)).toBe(true);
+    expect(m.fighters[1].damage).toBe(21);
+  });
+
+  it('Force Choke has a long cooldown', () => {
+    const m = lineUp('vader', 'luigi', 900);
+    const move = FIGHTERS.vader.moves.special;
+    use(m, 'special', moveTotalFrames(move) + 2);
+    expect(m.fighters[0].cooldowns.special).toBeGreaterThan(100);
   });
 });
 

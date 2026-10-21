@@ -30,9 +30,11 @@ const DIFFICULTY_BLURB: Record<CpuDifficulty, string> = {
 
 // Roster strip
 const N = FIGHTER_ORDER.length;
-const CARD_W = 160;
+// Cards shrink to fit the roster on one row (160 px wide for 7, ~130 px for 9).
+const CARD_GAP = N > 7 ? 8 : 12;
+const CARD_W = Math.min(160, Math.floor((GAME_WIDTH - 40 - (N - 1) * CARD_GAP) / N));
 const CARD_H = 200;
-const CARD_GAP = 12;
+const PREVIEW_SCALE = CARD_W >= 150 ? 1.2 : 1.0;
 const ROSTER_Y = 218;
 const cardX = (i: number) => GAME_WIDTH / 2 + (i - (N - 1) / 2) * (CARD_W + CARD_GAP);
 
@@ -156,12 +158,12 @@ export class SelectScene extends Phaser.Scene {
       for (let gx = x - CARD_W / 2 + 12; gx < x + CARD_W / 2 - 8; gx += 7) g.lineBetween(gx, top + 9, gx, top + 155);
     } else {
       g.fillStyle(color, 0.35);
-      g.fillCircle(x, top + 80, 56);
+      g.fillCircle(x, top + 80, Math.min(56, CARD_W * 0.38));
     }
     g.fillStyle(0x000000, 0.18);
-    g.fillEllipse(x, top + 146, 90, 10);
+    g.fillEllipse(x, top + 146, Math.min(90, CARD_W * 0.6), 10);
 
-    const name = displayText(this, x, top + 178, FIGHTERS[id].name.toUpperCase(), 17, '#ffffff', UI.inkCss, 5);
+    const name = displayText(this, x, top + 178, FIGHTERS[id].name.toUpperCase(), CARD_W >= 150 ? 17 : 15, '#ffffff', UI.inkCss, 5);
     while (name.width > CARD_W - 14 && Number.parseInt(String(name.style.fontSize), 10) > 9) {
       name.setFontSize(Number.parseInt(String(name.style.fontSize), 10) - 1);
     }
@@ -336,7 +338,7 @@ export class SelectScene extends Phaser.Scene {
       g.clear();
       const recent = (i === this.playerIndex && this.t - this.confirmedAt[0] < 90)
         || (i === this.cpuIndex && this.t - this.confirmedAt[1] < 90);
-      drawFighter(g, id, posed(id, recent ? 'victory' : 'preview', this.t + i * 30), cardX(i), ROSTER_Y - CARD_H / 2 + 146, 1, 1.2);
+      drawFighter(g, id, posed(id, recent ? 'victory' : 'preview', this.t + i * 30), cardX(i), ROSTER_Y - CARD_H / 2 + 146, 1, PREVIEW_SCALE);
     });
 
     // Detail panel previews

@@ -15,6 +15,7 @@ export class ProjectileView {
     for (const p of projectiles) {
       if (p.kind === 'beam') this.beam(p, clock);
       else if (p.kind === 'web') this.web(p, clock);
+      else if (p.kind === 'rifle') this.rifle(p);
       else this.batarang(p);
     }
   }
@@ -35,6 +36,21 @@ export class ProjectileView {
     g.fillCircle(p.x, p.y, h * 0.75);
     g.fillStyle(0xffffff, fade);
     g.fillCircle(p.x, p.y, h * 0.42);
+  }
+
+  /** Gundam's beam rifle shot: a short, hot pink-yellow bolt. */
+  private rifle(p: ProjectileState): void {
+    const g = this.g;
+    const dir = Math.sign(p.vx) || 1;
+    const tail = p.x - dir * 54;
+    g.lineStyle(14, 0xff5fd2, 0.3);
+    g.lineBetween(tail, p.y, p.x, p.y);
+    g.lineStyle(7, 0xffd23f, 0.9);
+    g.lineBetween(tail + dir * 10, p.y, p.x, p.y);
+    g.lineStyle(3, 0xffffff, 1);
+    g.lineBetween(tail + dir * 18, p.y, p.x, p.y);
+    g.fillStyle(0xffffff, 1);
+    g.fillCircle(p.x, p.y, 4);
   }
 
   private web(p: ProjectileState, clock: number): void {

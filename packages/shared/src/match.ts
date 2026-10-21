@@ -5,7 +5,7 @@ import {
 import {
   chargeFrames, FIGHTERS, hitboxWindow, moveTotalFrames,
   type FighterDef, type FighterId, type HitboxDef, type HitEffect, type MoveDef, type MoveSlot,
-  type ProjectileBehavior, type ProjectileKind,
+  type ProjectileBehavior, type ProjectileKind, type RestrainKind,
 } from './fighters';
 import { approach, clamp, lerp, rectsOverlap } from './geometry';
 import { emptyInput, type InputFrame } from './input';
@@ -70,8 +70,9 @@ export interface FighterState {
   comboHits: number;
   /** Consecutive frames this fighter has been free of hitstun/hitstop. */
   freeFrames: number;
-  /** Frames left restrained by a web (set from the web's fixed hitstun). */
-  webbed: number;
+  /** Frames left restrained (web or Force Choke), set from the move's fixed hitstun. */
+  restrained: number;
+  restrainKind: RestrainKind | null;
   buffer: { action: BufferedAction; frames: number } | null;
   respawnTimer: number;
   lastHitBy: number | null;
@@ -198,7 +199,8 @@ export function createFighter(id: number, fighter: FighterId, stage: StageDef, s
     airDodgesUsed: 0,
     comboHits: 0,
     freeFrames: 999,
-    webbed: 0,
+    restrained: 0,
+    restrainKind: null,
     buffer: null,
     respawnTimer: 0,
     lastHitBy: null,
@@ -306,8 +308,12 @@ export function stepMatch(m: MatchState, inputs: InputFrame[]): GameEvent[] {
   for (const f of m.fighters) {
     checkBlastZone(m, f);
     f.freeFrames = f.action === 'hitstun' || f.hitstop > 0 ? 0 : f.freeFrames + 1;
-    if (f.action !== 'hitstun') f.webbed = 0;
-    else if (f.webbed > 0 && f.hitstop === 0) f.webbed--;
+    if (f.action !== 'hitstun' || f.restrained <= 0) {
+      f.restrained = 0;
+      f.restrainKind = null;
+    } else if (f.hitstop === 0) {
+      f.restrained--;
+    }
   }
 
   m.timeLeft = Math.max(0, m.timeLeft - 1);
@@ -639,10 +645,20 @@ function physics(m: MatchState, f: FighterState, input: InputFrame, dir: number)
     }
   }
 
+  // Force Choke: held suspended, rising slightly, with momentum bled off.
+  const held = f.action === 'hitstun' && f.restrained > 0 && f.restrainKind === 'force';
+  if (held) {
+    f.vx = approach(f.vx, 0, s.groundFriction * DT);
+    f.kbx = approach(f.kbx, 0, 3000 * DT);
+  }
+
   // Vertical
   if (!f.grounded) {
     if (flying) {
       f.vy = 0;
+    } else if (held) {
+      f.vy = approach(f.vy, -25, 2000 * DT);
+      f.kby = approach(f.kby, 0, 3000 * DT);
     } else if (vanishing) {
       f.vy *= 0.8;
     } else {
@@ -868,7 +884,7 @@ export interface HitValues {
   angle: number;
   hitstunMultiplier: number;
   stunFrames?: number;
-  restrain?: boolean;
+  restrain?: RestrainKind;
 }
 
 function hitEffectValues(h: HitEffect): HitValues {
@@ -998,7 +1014,8 @@ function applyHit(m: MatchState, h: PendingHit): void {
   vic.hitstun = v.stunFrames !== undefined
     ? Math.max(1, Math.round(v.stunFrames * Math.max(cb.comboHitstunFloor, Math.pow(cb.comboHitstunDecay, vic.comboHits))))
     : hitstunFrames(speed, m.rules, v.hitstunMultiplier, vic.comboHits);
-  vic.webbed = v.restrain ? vic.hitstun : 0;
+  vic.restrained = v.restrain ? vic.hitstun : 0;
+  vic.restrainKind = v.restrain ?? null;
   vic.action = 'hitstun';
   vic.move = null;
   vic.fastFalling = false;

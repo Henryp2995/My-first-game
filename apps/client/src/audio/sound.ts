@@ -150,6 +150,18 @@ class SoundManager {
     this.tone(300, 900, 0.3, 'sawtooth', 0.05);
     this.noise(0.4, 0.14, 'bandpass', 1200, 4000);
   }
+  rifle(): void {
+    this.tone(2200, 500, 0.16, 'sawtooth', 0.09);
+    this.noise(0.12, 0.2, 'bandpass', 4000, 1500);
+  }
+  saber(): void {
+    this.tone(110, 190, 0.22, 'sawtooth', 0.07);
+    this.noise(0.2, 0.12, 'bandpass', 700, 1800);
+  }
+  choke(): void {
+    this.tone(70, 55, 0.8, 'sine', 0.3);
+    this.noise(0.8, 0.18, 'lowpass', 400, 80);
+  }
   judgeNumber(n: number): void {
     for (let i = 0; i < Math.min(n, 9); i++) this.tone(880 + n * 40, 880 + n * 40, 0.035, 'square', 0.05, i * 0.045);
   }

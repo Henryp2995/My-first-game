@@ -24,6 +24,8 @@ const RIGS: Record<FighterId, Rig> = {
   batman: { hipH: 40, thigh: 20, shin: 20, torso: 28, neck: 3, headR: 12.5, upperArm: 17, foreArm: 15, limbW: 9, legW: 10.5, torsoW: 26 },
   naruto: { hipH: 35, thigh: 17.5, shin: 17.5, torso: 21, neck: 3, headR: 13, upperArm: 14, foreArm: 13, limbW: 7, legW: 8, torsoW: 19 },
   goku: { hipH: 38, thigh: 19, shin: 19, torso: 25, neck: 3, headR: 12, upperArm: 16, foreArm: 14, limbW: 8.5, legW: 9.5, torsoW: 23 },
+  gundam: { hipH: 42, thigh: 20, shin: 21, torso: 28, neck: 2, headR: 12, upperArm: 17, foreArm: 16, limbW: 11, legW: 13, torsoW: 30 },
+  vader: { hipH: 42, thigh: 21, shin: 21, torso: 29, neck: 2, headR: 13, upperArm: 17, foreArm: 16, limbW: 10, legW: 11, torsoW: 27 },
 };
 
 /** Colors for the four crossover fighters, drawn by the shared "hero" path below. */
@@ -45,7 +47,7 @@ export interface HeroColors {
   cape: number;
 }
 
-type HeroId = 'spiderman' | 'batman' | 'naruto' | 'goku';
+type HeroId = 'spiderman' | 'batman' | 'naruto' | 'goku' | 'gundam' | 'vader';
 
 const HERO_COLORS: Record<HeroId, HeroColors> = {
   spiderman: {
@@ -68,7 +70,20 @@ const HERO_COLORS: Record<HeroId, HeroColors> = {
     thigh: 0xff7a1a, shin: 0xff7a1a, boot: 0x1f4fbf, skin: 0xf3c79c, hair: 0x16161c, eye: 0x16161c,
     accent: 0x1f4fbf, accent2: 0xffd23f, cape: 0,
   },
+  gundam: {
+    outline: 0x1b1d2a, suit: 0x2c4fb5, suit2: 0xd92b2b, upperArm: 0xf2f3f7, foreArm: 0xf2f3f7, hand: 0x6a7080,
+    thigh: 0xf2f3f7, shin: 0xf2f3f7, boot: 0xd92b2b, skin: 0xf2f3f7, hair: 0xffd23f, eye: 0x6dff8a,
+    accent: 0xffd23f, accent2: 0xd92b2b, cape: 0,
+  },
+  vader: {
+    outline: 0x020203, suit: 0x18181d, suit2: 0x2b2b33, upperArm: 0x18181d, foreArm: 0x18181d, hand: 0x0e0e11,
+    thigh: 0x18181d, shin: 0x18181d, boot: 0x0e0e11, skin: 0x121216, hair: 0x45454f, eye: 0x4a1f22,
+    accent: 0x8a8f9c, accent2: 0xb9c2cc, cape: 0x0b0b0e,
+  },
 };
+
+/** Lightsaber / beam saber blade colors. */
+const SABER_COLORS: Partial<Record<HeroId, number>> = { gundam: 0xff5fd2, vader: 0xff2a2a };
 
 const HERO_ALT_COLORS: Record<HeroId, HeroColors> = {
   spiderman: {
@@ -78,6 +93,10 @@ const HERO_ALT_COLORS: Record<HeroId, HeroColors> = {
   batman: { ...HERO_COLORS.batman, foreArm: 0x1f2e6b, hand: 0x1f2e6b, shin: 0x1f2e6b, boot: 0x1f2e6b, hair: 0x1f2e6b, cape: 0x1f2e6b, suit: 0x8b90a0, suit2: 0x8b90a0, upperArm: 0x8b90a0, thigh: 0x8b90a0 },
   naruto: { ...HERO_COLORS.naruto, suit: 0x26262f, upperArm: 0x26262f, foreArm: 0x26262f, thigh: 0x26262f, shin: 0x26262f, suit2: 0xff8c1a },
   goku: { ...HERO_COLORS.goku, suit: 0x2a5ad8, thigh: 0x2a5ad8, shin: 0x2a5ad8, suit2: 0xff8c1a, upperArm: 0xff8c1a, accent: 0xff8c1a, boot: 0xff8c1a },
+  gundam: {
+    ...HERO_COLORS.gundam, suit: 0x23232c, upperArm: 0x3a3f4f, foreArm: 0x3a3f4f, thigh: 0x3a3f4f, shin: 0x3a3f4f, skin: 0x3a3f4f,
+  },
+  vader: { ...HERO_COLORS.vader, cape: 0x4a0d12, suit2: 0x3a1418 },
 };
 
 function isHero(id: FighterId): id is HeroId {
@@ -140,6 +159,8 @@ export const FIGHTER_UI_COLOR: Record<FighterId, number> = {
   batman: 0x8a93a8,
   naruto: 0xff8c1a,
   goku: 0x2f6fe0,
+  gundam: 0xe8ecf4,
+  vader: 0xe0303a,
 };
 
 function whitePalette(p: Palette): Palette {
@@ -499,6 +520,7 @@ export function drawFighter(
     };
     armBack();
     legBack();
+    if (heroId === 'gundam') drawShield(armB[2], colors, c);
 
     // Torso
     outlined([hip, shoulder], rig.torsoW, c(colors.suit));
@@ -527,6 +549,32 @@ export function drawFighter(
       dot(at(1, 2), rig.torsoW * 0.32, c(W));
       seg(at(0.08, rig.torsoW * 0.3), at(0.7, rig.torsoW * 0.3), 1.2, c(W));
       dot(at(0.0), rig.torsoW * 0.38, c(colors.suit2));
+    } else if (heroId === 'gundam') {
+      // Blue chest with yellow vents, red waist block
+      seg(at(0.0), at(0.22), rig.torsoW - 4, c(colors.suit2));
+      belt(0.24, 4, c(0xf2f3f7));
+      for (const dx of [-6, 6]) {
+        const v = at(0.72, dx + 3);
+        const V = T(v.x, v.y);
+        g.fillStyle(c(colors.accent), 1);
+        g.fillRect(V.x - 3 * s, V.y - 4 * s, 6 * s, 8 * s);
+        g.lineStyle(1 * s, ol, 1);
+        g.strokeRect(V.x - 3 * s, V.y - 4 * s, 6 * s, 8 * s);
+      }
+    } else if (heroId === 'vader') {
+      // Chest control box with lights, silver belt
+      const box = at(0.7, 5);
+      const B = T(box.x, box.y);
+      g.fillStyle(c(colors.suit2), 1);
+      g.fillRect(B.x - 7 * s, B.y - 6 * s, 14 * s, 12 * s);
+      g.lineStyle(1.2 * s, c(colors.accent), 1);
+      g.strokeRect(B.x - 7 * s, B.y - 6 * s, 14 * s, 12 * s);
+      [0xe0303a, 0x3ad06a, 0x3a7ad8].forEach((col, k) => {
+        g.fillStyle(c(col), 1);
+        g.fillRect(B.x + (-5 + k * 4) * s, B.y - 2 * s, 2.6 * s, 4 * s);
+      });
+      belt(0.06, 6, c(colors.accent2));
+      for (const dx of [-6, 5]) dot(at(0.06, dx), 2.4, c(0x2b2b33));
     } else {
       // Goku: undershirt V, belt, chest patch
       seg(at(0.86, 4), shoulder, rig.torsoW * 0.45, c(colors.suit2));
@@ -563,11 +611,20 @@ export function drawFighter(
       }
     }
     if (heroId === 'spiderman') stripes2(armF[1], armF[2], rig.limbW, c(colors.accent));
+    if (pose.prop === 'saber' || pose.prop === 'rifle') drawHeldProp(heroId);
     const H = T(armF[2].x, armF[2].y);
     g.fillStyle(ol, 1);
     g.fillCircle(H.x, H.y, (rig.limbW * 0.62 + 1.6) * s);
     g.fillStyle(c(colors.hand), 1);
     g.fillCircle(H.x, H.y, rig.limbW * 0.62 * s);
+    if (heroId === 'gundam') {
+      // Shoulder armor block over the front shoulder
+      const S = T(shoulder.x, shoulder.y + 2);
+      g.fillStyle(ol, 1);
+      g.fillRoundedRect(S.x - 12 * s, S.y - 9 * s, 24 * s, 18 * s, 5 * s);
+      g.fillStyle(c(colors.upperArm), 1);
+      g.fillRoundedRect(S.x - 10 * s, S.y - 7 * s, 20 * s, 14 * s, 4 * s);
+    }
 
     const headW = T(head.x, head.y);
     const top = Math.min(headW.y - r * s * 1.8, T(shoulder.x, shoulder.y).y - r * 2 * s);
@@ -622,6 +679,35 @@ export function drawFighter(
         g.lineBetween(a.x, a.y, b.x, b.y);
       }
       if (pose.expression === 'happy' || pose.expression === 'focus') poly(ellipse(r * 0.6, 9, 3, 1.6, 0, Math.PI, 8), c(0xffffff), ol, 1);
+    } else if (heroId === 'gundam') {
+      // V-fin antenna, helmet, faceplate, eyes
+      poly([[1, -r * 0.55], [r * 1.25, -r * 1.75], [r * 0.2, -r * 0.6]], c(colors.hair), ol, 1.2);
+      poly([[-1, -r * 0.55], [-r * 0.6, -r * 1.7], [-r * 0.2, -r * 0.5]], c(colors.hair), ol, 1.2);
+      poly(ellipse(0, 0, r, r * 1.05), c(colors.skin), ol);
+      poly([[2, -1], [r + 1.5, -1.5], [r + 0.5, 6], [3, 6]], c(0x8a90a0), ol, 1.2);
+      poly([[3, 6], [r + 0.5, 6], [r - 1.5, 10.5], [4, 10]], c(colors.suit2), ol, 1.2);
+      poly([[4, -4.5], [r + 0.5, -5.5], [r + 0.5, -2.5], [4, -1.8]], c(colors.eye));
+      headDot(r * 0.35, -r * 0.62, 2.2, c(colors.suit2));
+      g.lineStyle(1 * s, ol, 1);
+      for (const vy of [1.5, 3.5]) {
+        const a0 = HP(4, vy);
+        const a1 = HP(r - 1, vy);
+        g.lineBetween(a0.x, a0.y, a1.x, a1.y);
+      }
+    } else if (heroId === 'vader') {
+      // Flared helmet, mask, triangular grille, dark lenses
+      poly([[-r * 1.15, r * 0.95], [-r * 1.05, -r * 0.2], [-r * 0.6, -r * 0.85], [0, -r * 1.05], [r * 0.7, -r * 0.8],
+        [r * 1.05, -r * 0.1], [r * 1.0, r * 0.4], [r * 0.4, r * 0.55], [-r * 0.2, r * 0.75]], c(colors.skin), ol, 2);
+      poly(ellipse(-r * 0.15, -r * 0.4, r * 0.55, r * 0.35, Math.PI * 1.1, Math.PI * 1.8, 8).concat([[-r * 0.1, -r * 0.4]]), c(colors.hair));
+      poly([[1, -2], [r + 1.5, -2.5], [r + 2, 5], [r - 1, r * 1.1], [5, r * 1.05], [1, 5]], c(0x24242b), ol, 1.4);
+      poly([[3, -3.5], [r - 0.5, -3.5], [r - 1, 1], [4, 0.5]], c(colors.eye), ol, 1);
+      poly([[6, 5], [r + 0.5, 5], [r - 1.5, r * 1.0], [7.5, r * 0.95]], c(0x3a3a44));
+      g.lineStyle(1 * s, c(colors.accent2), 0.9);
+      for (const gx of [7.5, 9.5, 11.5]) {
+        const a0 = HP(gx, 6);
+        const a1 = HP(gx, r * 0.9);
+        g.lineBetween(a0.x, a0.y, a1.x, a1.y);
+      }
     } else {
       // Goku
       poly([[-r * 0.7, 7], [-r * 1.75, 1], [-r * 1.05, -5], [-r * 1.85, -11], [-r * 0.75, -r * 0.95], [-r * 1.1, -r * 1.8],
@@ -641,6 +727,55 @@ export function drawFighter(
         g.lineBetween(m0.x, m0.y, m1.x, m1.y);
       }
     }
+  }
+
+  function drawShield(hand: V, colors: HeroColors, c: (n: number) => number) {
+    // Tall red shield with a white rim and a yellow cross, carried on the back arm.
+    const cx = hand.x - 4;
+    const cy = hand.y - 4;
+    const pts = [[-9, -22], [9, -22], [11, 10], [0, 26], [-11, 10]].map(([px, py]) => T(cx + px, cy + py));
+    g.lineStyle(5.5 * s, ol, 1);
+    g.strokePoints(pts, true);
+    g.fillStyle(c(colors.suit2), 1);
+    g.fillPoints(pts, true);
+    g.lineStyle(3 * s, c(0xf2f3f7), 1);
+    g.strokePoints(pts, true);
+    const v0 = T(cx, cy - 14);
+    const v1 = T(cx, cy + 14);
+    const h0 = T(cx - 7, cy - 4);
+    const h1 = T(cx + 7, cy - 4);
+    g.lineStyle(3 * s, c(colors.accent), 1);
+    g.lineBetween(v0.x, v0.y, v1.x, v1.y);
+    g.lineBetween(h0.x, h0.y, h1.x, h1.y);
+  }
+
+  /** Beam saber / lightsaber (glowing blade along the forearm) or Gundam's beam rifle. */
+  function drawHeldProp(heroId: HeroId) {
+    const hand = armF[2];
+    const elbow = armF[1];
+    const len = Math.hypot(hand.x - elbow.x, hand.y - elbow.y) || 1;
+    const ux = (hand.x - elbow.x) / len;
+    const uy = (hand.y - elbow.y) / len;
+    if (pose.prop === 'rifle') {
+      seg({ x: hand.x - ux * 6, y: hand.y - uy * 6 }, { x: hand.x + ux * 30, y: hand.y + uy * 30 }, 7, flash ? 0xffffff : 0x4a5060);
+      seg({ x: hand.x + ux * 4, y: hand.y + uy * 4 + 6 }, { x: hand.x + ux * 4, y: hand.y + uy * 4 }, 4, flash ? 0xffffff : 0x4a5060);
+      dot({ x: hand.x + ux * 31, y: hand.y + uy * 31 }, 2.4, 0xffd23f);
+      return;
+    }
+    const blade = SABER_COLORS[heroId] ?? 0x6fd8ff;
+    const hiltEnd = { x: hand.x + ux * 8, y: hand.y + uy * 8 };
+    const tip = { x: hand.x + ux * 62, y: hand.y + uy * 62 };
+    seg({ x: hand.x - ux * 4, y: hand.y - uy * 4 }, hiltEnd, 4.5, flash ? 0xffffff : 0x9aa0ad);
+    const A = T(hiltEnd.x, hiltEnd.y);
+    const B = T(tip.x, tip.y);
+    g.lineStyle(11 * s, blade, 0.25);
+    g.lineBetween(A.x, A.y, B.x, B.y);
+    g.lineStyle(6.5 * s, blade, 0.85);
+    g.lineBetween(A.x, A.y, B.x, B.y);
+    g.lineStyle(2.6 * s, 0xffffff, 1);
+    g.lineBetween(A.x, A.y, B.x, B.y);
+    g.fillStyle(0xffffff, 1);
+    g.fillCircle(B.x, B.y, 1.6 * s);
   }
 
   function stripes2(a: V, b: V, w: number, color: number) {

@@ -350,7 +350,10 @@ export class CpuController {
     if (me.grounded && Math.abs(dy) < 50 && ready('special') && special.behavior?.type === 'projectile') {
       const kind = special.behavior.kind;
       const ownShotOut = m.projectiles.some((p) => p.owner === me.id && p.kind === kind);
-      const inBand = kind === 'web' ? adx > 110 && adx < 480 : kind === 'batarang' ? adx > 140 && adx < 520 : adx > 180 && adx < 900;
+      const inBand = kind === 'web' ? adx > 110 && adx < 480
+        : kind === 'batarang' ? adx > 140 && adx < 520
+          : kind === 'rifle' ? adx > 150 && adx < 760
+            : adx > 180 && adx < 900;
       const odds = kind === 'beam' ? 0.18 : 0.28;
       if (!ownShotOut && inBand && Math.abs(dy) < 40 && foe.action !== 'hitstun' && this.chance(odds)) {
         // Kamehameha: smarter CPUs charge longer from farther away.

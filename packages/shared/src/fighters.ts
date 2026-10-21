@@ -1,4 +1,4 @@
-export type FighterId = 'gnw' | 'luigi' | 'sheik' | 'spiderman' | 'batman' | 'naruto' | 'goku';
+export type FighterId = 'gnw' | 'luigi' | 'sheik' | 'spiderman' | 'batman' | 'naruto' | 'goku' | 'gundam' | 'vader';
 export type MoveSlot = 'light' | 'heavy' | 'special' | 'aerial';
 
 export interface FighterStats {
@@ -46,8 +46,11 @@ export interface HitboxDef {
   hitstunMultiplier?: number;
   /** Fixed hitstun (frames) instead of knockback-based hitstun — used for restraining attacks. */
   stunFrames?: number;
-  /** Marks the victim as restrained (webbed) for the duration of the hitstun (visual + CPU awareness). */
-  restrain?: boolean;
+  /**
+   * Restrains the victim for the duration of the hitstun: 'web' (Spider-Man) wraps them up;
+   * 'force' (Vader's choke) also holds them suspended in the air.
+   */
+  restrain?: RestrainKind;
 }
 
 /** The damage/launch part of a hitbox, used by projectiles (which carry their own size and position). */
@@ -91,7 +94,9 @@ export interface VanishBehavior {
   distance: number;
 }
 
-export type ProjectileKind = 'web' | 'batarang' | 'beam';
+export type RestrainKind = 'web' | 'force';
+
+export type ProjectileKind = 'web' | 'batarang' | 'beam' | 'rifle';
 
 /**
  * Fires a projectile when the move reaches its active frames. Projectiles are simulated in the
@@ -469,7 +474,7 @@ const SPIDERMAN: FighterDef = {
         h: 20,
         offsetX: 30,
         offsetY: -50,
-        hit: { damage: 3, baseKnockback: 60, knockbackGrowth: 0.2, angle: 0, stunFrames: 40, restrain: true },
+        hit: { damage: 3, baseKnockback: 60, knockbackGrowth: 0.2, angle: 0, stunFrames: 40, restrain: 'web' },
         airUpZip: { vx: 260, vy: -1000 },
       },
     },
@@ -724,10 +729,160 @@ const GOKU: FighterDef = {
   },
 };
 
+const GUNDAM: FighterDef = {
+  id: 'gundam',
+  name: 'Gundam RX-78',
+  tagline: 'Heavy armor, triple thrusters.',
+  description: 'The heaviest fighter. Beam saber up close, Beam Rifle at range, and thrusters for three jumps.',
+  ratings: { speed: 3, power: 4, jump: 3, weight: 'Heavy', difficulty: 'Medium' },
+  stats: {
+    width: 46,
+    height: 92,
+    weight: 132,
+    runSpeed: 480,
+    groundAccel: 2200,
+    groundFriction: 2400,
+    airSpeed: 360,
+    airAccel: 2000,
+    airFriction: 450,
+    gravity: 2200,
+    maxFallSpeed: 1000,
+    fastFallSpeed: 1450,
+    jumpVelocity: 900,
+    doubleJumpVelocity: 820,
+    // Thruster boosts: one extra mid-air jump.
+    maxJumps: 3,
+  },
+  moves: {
+    light: {
+      id: 'gundam-saber',
+      name: 'Beam Saber Slashes',
+      startup: 5,
+      active: 10,
+      recovery: 10,
+      cooldown: 3,
+      hitboxes: [
+        { x: 48, y: -52, w: 62, h: 52, damage: 4, baseKnockback: 220, knockbackGrowth: 1, angle: 60, start: 5, end: 8, group: 0 },
+        { x: 50, y: -40, w: 66, h: 50, damage: 3, baseKnockback: 300, knockbackGrowth: 3.5, angle: 35, start: 11, end: 15, group: 1 },
+      ],
+    },
+    heavy: {
+      id: 'gundam-overhead',
+      name: 'Overhead Saber',
+      startup: 15,
+      active: 5,
+      recovery: 25,
+      cooldown: 20,
+      hitboxes: [{ x: 56, y: -60, w: 76, h: 100, damage: 15, baseKnockback: 470, knockbackGrowth: 10, angle: 45 }],
+    },
+    special: {
+      id: 'gundam-rifle',
+      name: 'Beam Rifle',
+      startup: 14,
+      active: 2,
+      recovery: 20,
+      cooldown: 75,
+      hitboxes: [],
+      behavior: {
+        type: 'projectile',
+        kind: 'rifle',
+        speed: 1650,
+        life: 30,
+        w: 44,
+        h: 12,
+        offsetX: 52,
+        offsetY: -58,
+        hit: { damage: 8, baseKnockback: 320, knockbackGrowth: 4.5, angle: 20 },
+      },
+    },
+    aerial: {
+      id: 'gundam-plunge',
+      name: 'Saber Plunge',
+      startup: 7,
+      active: 10,
+      recovery: 14,
+      cooldown: 6,
+      landingLag: 14,
+      hitboxes: [{ x: 6, y: 14, w: 40, h: 54, damage: 11, baseKnockback: 330, knockbackGrowth: 6, angle: -70 }],
+    },
+  },
+};
+
+const VADER: FighterDef = {
+  id: 'vader',
+  name: 'Darth Vader',
+  tagline: 'Slow. Relentless. Lethal.',
+  description: 'The slowest walker and hardest hitter. Force Choke holds a foe in midair, open for a saber strike.',
+  ratings: { speed: 2, power: 5, jump: 2, weight: 'Heavy', difficulty: 'Medium' },
+  stats: {
+    width: 44,
+    height: 92,
+    weight: 120,
+    runSpeed: 440,
+    groundAccel: 2400,
+    groundFriction: 2800,
+    airSpeed: 320,
+    airAccel: 1500,
+    airFriction: 400,
+    gravity: 2350,
+    maxFallSpeed: 990,
+    fastFallSpeed: 1420,
+    jumpVelocity: 920,
+    doubleJumpVelocity: 870,
+    maxJumps: 2,
+  },
+  moves: {
+    light: {
+      id: 'vader-slash',
+      name: 'Lightsaber Slashes',
+      startup: 4,
+      active: 10,
+      recovery: 11,
+      cooldown: 3,
+      hitboxes: [
+        { x: 50, y: -50, w: 64, h: 54, damage: 3, baseKnockback: 220, knockbackGrowth: 1, angle: 60, start: 4, end: 7, group: 0 },
+        { x: 52, y: -44, w: 68, h: 52, damage: 4, baseKnockback: 310, knockbackGrowth: 3.8, angle: 38, start: 10, end: 14, group: 1 },
+      ],
+    },
+    heavy: {
+      id: 'vader-cleave',
+      name: 'Saber Cleave',
+      startup: 13,
+      active: 5,
+      recovery: 24,
+      cooldown: 22,
+      hitboxes: [{ x: 58, y: -56, w: 80, h: 96, damage: 15, baseKnockback: 500, knockbackGrowth: 11, angle: 40 }],
+    },
+    special: {
+      id: 'vader-choke',
+      name: 'Force Choke',
+      startup: 15,
+      active: 6,
+      recovery: 26,
+      cooldown: 150,
+      hitboxes: [{
+        x: 125, y: -55, w: 140, h: 100, damage: 6, baseKnockback: 40, knockbackGrowth: 0, angle: 90,
+        stunFrames: 50, restrain: 'force',
+      }],
+    },
+    aerial: {
+      id: 'vader-spin',
+      name: 'Dark Saber Spin',
+      startup: 7,
+      active: 9,
+      recovery: 14,
+      cooldown: 6,
+      landingLag: 13,
+      hitboxes: [{ x: 4, y: -10, w: 96, h: 70, damage: 10, baseKnockback: 320, knockbackGrowth: 6, angle: -55, autoDirection: true }],
+    },
+  },
+};
+
 export const FIGHTERS: Record<FighterId, FighterDef> = {
   gnw: GNW, luigi: LUIGI, sheik: SHEIK, spiderman: SPIDERMAN, batman: BATMAN, naruto: NARUTO, goku: GOKU,
+  gundam: GUNDAM, vader: VADER,
 };
-export const FIGHTER_ORDER: FighterId[] = ['gnw', 'luigi', 'sheik', 'spiderman', 'batman', 'naruto', 'goku'];
+export const FIGHTER_ORDER: FighterId[] = ['gnw', 'luigi', 'sheik', 'spiderman', 'batman', 'naruto', 'goku', 'gundam', 'vader'];
 
 export function getFighter(id: FighterId): FighterDef {
   const def = FIGHTERS[id];

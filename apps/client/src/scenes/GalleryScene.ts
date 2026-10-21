@@ -5,6 +5,9 @@ import { computePose, type AnimInput } from '../render/pose';
 import { GAME_WIDTH } from '../theme';
 import { bodyText } from '../ui/widgets';
 
+const ROW_H = Math.min(99, Math.floor(600 / FIGHTER_ORDER.length));
+const ROW_SCALE = ROW_H / 94;
+
 /** Dev tool (open with `?gallery`): every fighter in a range of poses, for art iteration. */
 export class GalleryScene extends Phaser.Scene {
   private g!: Phaser.GameObjects.Graphics;
@@ -27,7 +30,7 @@ export class GalleryScene extends Phaser.Scene {
     g.clear();
     FIGHTER_ORDER.forEach((id, row) => {
       const def = FIGHTERS[id];
-      const y = 125 + row * 99;
+      const y = 125 + row * ROW_H;
       const cells: { action: FighterAction | 'victory'; slot?: MoveSlot; vy?: number; grounded?: boolean; vx?: number }[] = [
         { action: 'idle' }, { action: 'run', vx: def.stats.runSpeed }, { action: 'air', vy: -500, grounded: false },
         { action: 'hitstun' }, { action: 'attack', slot: 'light' }, { action: 'attack', slot: 'heavy' },
@@ -42,10 +45,10 @@ export class GalleryScene extends Phaser.Scene {
           charge: 0.5, rocketLaunched: move?.behavior?.type === 'rocket' ? frame >= move.startup : false,
         };
         const pose = computePose(input);
-        drawFighter(g, id, { ...pose, alpha: 1 }, 75 + i * 140, y, 1, 1.05);
+        drawFighter(g, id, { ...pose, alpha: 1 }, 75 + i * 140, y, 1, ROW_SCALE);
       });
     });
     g.lineStyle(1, 0x14112b, 0.3);
-    for (let r = 0; r < FIGHTER_ORDER.length; r++) g.lineBetween(0, 125 + r * 99, GAME_WIDTH, 125 + r * 99);
+    for (let r = 0; r < FIGHTER_ORDER.length; r++) g.lineBetween(0, 125 + r * ROW_H, GAME_WIDTH, 125 + r * ROW_H);
   }
 }

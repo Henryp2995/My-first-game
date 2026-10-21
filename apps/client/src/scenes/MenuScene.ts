@@ -85,7 +85,7 @@ export class MenuScene extends Phaser.Scene {
     const rules = [
       'You (P1) vs the CPU · 3 stocks each · 5 minutes · knock the CPU past the dotted blast lines.',
       'Damage % goes up as you get hit — the higher it is, the farther you fly. CPU: Easy → Expert.',
-      'Hold special to charge Luigi\'s rocket or Goku\'s Kamehameha (hold heavy for his charged strike) · Spider-Man: special + ↑ in the air web-zips.',
+      'Hold special to charge Luigi\'s rocket or Goku\'s Kamehameha · Spider-Man: special + ↑ in the air web-zips · Gundam has 3 jumps.',
       'Esc pauses a match · M toggles sound · ` (backtick) shows hitboxes.',
     ];
     rules.forEach((line, i) => objs.push(bodyText(this, cx, cy + 140 + i * 26, line, 15, '#e8e5ff', '500')));

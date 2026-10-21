@@ -156,52 +156,77 @@ export function installGlobalKeys(scene: Phaser.Scene): void {
   scene.events.once(Phaser.Scenes.Events.SHUTDOWN, off);
 }
 
+export interface OptionRow {
+  label: string;
+  /** Right-hand value text, re-read on every render. */
+  value?: () => string;
+  valueColor?: () => string;
+  /** 0..1: draws a slider bar for this row. */
+  slider?: () => number;
+  /** A/D, arrows, or clicking the left/right half of the row. */
+  adjust?: (dir: 1 | -1) => void;
+  /** Enter / Space / F, or a click. */
+  press?: () => void;
+  /** Extra keys while this row is selected (e.g. typing digits). Return true if handled. */
+  onKey?: (e: KeyboardEvent) => boolean;
+}
+
+export interface OptionsPanel {
+  render(): void;
+  close(): void;
+}
+
 /**
- * Audio settings overlay: master / music / SFX volume and mute, saved automatically.
- * Keyboard: W/S choose, A/D (or arrows) adjust, Enter toggles, Esc closes. Mouse: click − / +.
+ * Keyboard + mouse options overlay (audio settings, training settings). W/S choose, A/D adjust,
+ * Enter activates, Esc closes. Objects are announced with 'ui-object' so a scene with a separate
+ * HUD camera (Battle) can adopt them.
  */
-export function openAudioSettings(scene: Phaser.Scene, onClose: () => void): void {
+export function openOptionsPanel(scene: Phaser.Scene, opts: {
+  title: string;
+  rows: OptionRow[];
+  hint: string;
+  status?: () => string;
+  width?: number;
+  rowH?: number;
+  onClose: () => void;
+}): OptionsPanel {
+  const { rows } = opts;
+  const width = opts.width ?? 620;
+  const rowH = opts.rowH ?? 64;
   const cx = GAME_WIDTH / 2;
   const cy = GAME_HEIGHT / 2;
+  const height = 130 + rows.length * rowH + (opts.status ? 26 : 0);
+  const top = cy - height / 2;
   const objs: Phaser.GameObjects.GameObject[] = [];
   const dim = scene.add.rectangle(cx, cy, GAME_WIDTH, GAME_HEIGHT, 0x0d0b1f, 0.75).setInteractive();
-  objs.push(dim, panel(scene, cx, cy, 620, 560, UI.panel, 0xffffff, 0.97));
-  objs.push(displayText(scene, cx, cy - 235, 'AUDIO', 36, '#ffd23f'));
-  type Key = 'master' | 'music' | 'sfx';
-  const rows: { label: string; key?: Key; kind: 'slider' | 'mute' | 'test' | 'back' }[] = [
-    { label: 'MASTER', key: 'master', kind: 'slider' },
-    { label: 'MUSIC', key: 'music', kind: 'slider' },
-    { label: 'SOUND EFFECTS', key: 'sfx', kind: 'slider' },
-    { label: 'MUTE', kind: 'mute' },
-    { label: 'TEST SOUND', kind: 'test' },
-    { label: 'BACK', kind: 'back' },
-  ];
+  objs.push(dim, panel(scene, cx, cy, width, height, UI.panel, 0xffffff, 0.97));
+  objs.push(displayText(scene, cx, top + 42, opts.title, 34, '#ffd23f'));
   let index = 0;
   const bar = scene.add.graphics();
   objs.push(bar);
+  const fontSize = rowH >= 60 ? 20 : 17;
   const texts = rows.map((r, i) => {
-    const y = cy - 170 + i * 64;
-    const label = scene.add.text(cx - 260, y, r.label, { fontFamily: FONT_BODY, fontSize: '20px', fontStyle: '900', color: '#ffffff' }).setOrigin(0, 0.5);
-    const value = bodyText(scene, cx + 215, y, '', 20, '#ffffff', '900').setOrigin(1, 0.5);
+    const y = top + 100 + i * rowH;
+    const label = scene.add.text(cx - width / 2 + 50, y, r.label, { fontFamily: FONT_BODY, fontSize: `${fontSize}px`, fontStyle: '900', color: '#ffffff' }).setOrigin(0, 0.5);
+    const value = bodyText(scene, cx + width / 2 - 50, y, '', fontSize, '#ffffff', '900').setOrigin(1, 0.5);
     objs.push(label, value);
-    const rowZone = scene.add.zone(cx, y, 560, 56).setInteractive({ useHandCursor: true });
-    rowZone.on('pointerover', () => select(i));
-    rowZone.on('pointerdown', (p: Phaser.Input.Pointer) => {
+    const zone = scene.add.zone(cx, y, width - 60, rowH - 8).setInteractive({ useHandCursor: true });
+    zone.on('pointerover', () => select(i));
+    zone.on('pointerdown', (p: Phaser.Input.Pointer) => {
       select(i);
-      if (r.kind === 'slider') adjust(p.x < cx + 60 ? -1 : 1);
-      else press();
+      if (r.adjust) adjust(p.x < cx + width / 2 - 170 ? -1 : 1);
+      else activate();
     });
-    objs.push(rowZone);
+    objs.push(zone);
     return { label, value, y };
   });
-  const status = bodyText(scene, cx, cy + 222, '', 13, '#ffd23f', '700');
-  objs.push(status);
-  objs.push(bodyText(scene, cx, cy + 250, 'W/S choose · A/D adjust · Enter toggle · Esc back · click − / +', 13, UI.muted, '500'));
+  const status = opts.status ? bodyText(scene, cx, top + height - 52, '', 13, '#ffd23f', '700') : null;
+  if (status) objs.push(status);
+  objs.push(bodyText(scene, cx, top + height - 26, opts.hint, 13, UI.muted, '500'));
 
-  const step = 0.1;
   const render = () => {
-    const st = sound.state;
-    status.setText(sound.status());
+    if (closed) return;
+    status?.setText(opts.status?.() ?? '');
     bar.clear();
     rows.forEach((r, i) => {
       const t = texts[i];
@@ -209,26 +234,19 @@ export function openAudioSettings(scene: Phaser.Scene, onClose: () => void): voi
       t.label.setColor(sel ? '#ffd23f' : '#ffffff');
       if (sel) {
         bar.fillStyle(0xffffff, 0.08);
-        bar.fillRoundedRect(cx - 280, t.y - 27, 560, 54, 12);
+        bar.fillRoundedRect(cx - width / 2 + 30, t.y - rowH / 2 + 4, width - 60, rowH - 8, 12);
       }
-      if (r.kind === 'slider' && r.key) {
-        const v = st[r.key];
+      if (r.slider) {
+        const v = r.slider();
         const x0 = cx - 60;
         const w = 180;
         bar.fillStyle(0x000000, 0.4);
         bar.fillRoundedRect(x0, t.y - 7, w, 14, 7);
-        bar.fillStyle(st.muted ? 0x8a84bf : UI.accent, 1);
+        bar.fillStyle(sound.muted ? 0x8a84bf : UI.accent, 1);
         if (v > 0) bar.fillRoundedRect(x0, t.y - 7, Math.max(14, w * v), 14, 7);
-        t.value.setText(`− ${Math.round(v * 100)}% +`);
-      } else if (r.kind === 'test') {
-        t.value.setText(st.muted ? 'unmute first' : 'Enter / click');
-        t.value.setColor(UI.muted);
-      } else if (r.kind === 'mute') {
-        t.value.setText(st.muted ? 'ON (silent)' : 'OFF');
-        t.value.setColor(st.muted ? '#ff8a8a' : '#ffffff');
-      } else {
-        t.value.setText('');
       }
+      t.value.setText(r.value?.() ?? '');
+      t.value.setColor(r.valueColor?.() ?? (sel && r.adjust ? '#ffd23f' : '#ffffff'));
     });
   };
   const select = (i: number) => {
@@ -237,64 +255,120 @@ export function openAudioSettings(scene: Phaser.Scene, onClose: () => void): voi
     sound.menuMove();
     render();
   };
-  const adjust = (d: number) => {
+  const adjust = (d: 1 | -1) => {
     const r = rows[index];
-    if (r.kind === 'mute') return press();
-    if (!r.key) return;
-    const v = Math.round(Math.min(1, Math.max(0, sound.state[r.key] + d * step)) * 10) / 10;
-    sound.update({ [r.key]: v });
+    if (!r.adjust) return;
+    r.adjust(d);
     sound.menuMove();
     render();
   };
-  const press = () => {
+  const activate = () => {
     const r = rows[index];
-    if (r.kind === 'mute') {
-      sound.toggleMute();
+    if (r.press) {
       sound.menuSelect();
-      render();
-    } else if (r.kind === 'test') {
-      sound.test();
-    } else if (r.kind === 'back') close();
+      r.press();
+    } else if (r.adjust) {
+      r.adjust(1);
+      sound.menuMove();
+    }
+    render();
   };
   const onKey = (e: KeyboardEvent) => {
+    if (rows[index].onKey?.(e)) {
+      render();
+      return;
+    }
     if (e.code === 'ArrowUp' || e.code === 'KeyW') select((index + rows.length - 1) % rows.length);
     else if (e.code === 'ArrowDown' || e.code === 'KeyS') select((index + 1) % rows.length);
     else if (e.code === 'ArrowLeft' || e.code === 'KeyA') adjust(-1);
     else if (e.code === 'ArrowRight' || e.code === 'KeyD') adjust(1);
-    else if (e.code === 'Enter' || e.code === 'Space' || e.code === 'KeyF') press();
+    else if (e.code === 'Enter' || e.code === 'Space' || e.code === 'KeyF') activate();
     else if (e.code === 'Escape') close();
   };
   const offSettings = sound.onSettingsChange(render);
-  const statusTimer = scene.time.addEvent({ delay: 250, loop: true, callback: () => status.setText(sound.status()) });
+  const statusTimer = opts.status ? scene.time.addEvent({ delay: 250, loop: true, callback: render }) : null;
   let closed = false;
+  const teardown = () => {
+    scene.input.keyboard?.off('keydown', onKey);
+    offSettings();
+    statusTimer?.remove();
+  };
   const close = () => {
     if (closed) return;
     closed = true;
     sound.menuBack();
-    scene.input.keyboard?.off('keydown', onKey);
-    offSettings();
-    statusTimer.remove();
+    teardown();
     objs.forEach((o) => o.destroy());
-    // Let this key press finish before the menu underneath listens again.
-    scene.time.delayedCall(50, onClose);
+    // Let this key press finish before whatever is underneath listens again.
+    scene.time.delayedCall(50, opts.onClose);
   };
-  // Defer so the Enter that opened the overlay doesn't also trigger a row.
-  scene.time.delayedCall(0, () => scene.input.keyboard?.on('keydown', onKey));
-  scene.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
-    scene.input.keyboard?.off('keydown', onKey);
-    offSettings();
+  // Defer so the key that opened the panel doesn't also trigger a row.
+  scene.time.delayedCall(0, () => {
+    if (!closed) scene.input.keyboard?.on('keydown', onKey);
   });
-  objs.forEach((o) => (o as unknown as { setDepth?: (d: number) => void }).setDepth?.(900));
+  scene.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+    closed = true;
+    teardown();
+  });
+  objs.forEach((o) => {
+    (o as unknown as { setDepth?: (d: number) => void }).setDepth?.(900);
+    scene.events.emit('ui-object', o);
+  });
   render();
+  return { render, close };
 }
 
+/** Audio settings: master / music / SFX volume, mute and a test sound. Saved automatically. */
+export function openAudioSettings(scene: Phaser.Scene, onClose: () => void): void {
+  const step = 0.1;
+  const slider = (key: 'master' | 'music' | 'sfx', label: string): OptionRow => ({
+    label,
+    slider: () => sound.state[key],
+    value: () => `− ${Math.round(sound.state[key] * 100)}% +`,
+    adjust: (d) => sound.update({ [key]: Math.round(Math.min(1, Math.max(0, sound.state[key] + d * step)) * 10) / 10 }),
+  });
+  const panelRef: { p?: OptionsPanel } = {};
+  panelRef.p = openOptionsPanel(scene, {
+    title: 'AUDIO',
+    rows: [
+      slider('master', 'MASTER'),
+      slider('music', 'MUSIC'),
+      slider('sfx', 'SOUND EFFECTS'),
+      {
+        label: 'MUTE',
+        value: () => (sound.muted ? 'ON (silent)' : 'OFF'),
+        valueColor: () => (sound.muted ? '#ff8a8a' : '#ffffff'),
+        press: () => sound.toggleMute(),
+        adjust: () => sound.toggleMute(),
+      },
+      {
+        label: 'TEST SOUND',
+        value: () => (sound.muted ? 'unmute first' : 'Enter / click'),
+        valueColor: () => UI.muted,
+        press: () => sound.test(),
+      },
+      { label: 'BACK', press: () => panelRef.p?.close() },
+    ],
+    status: () => sound.status(),
+    hint: 'W/S choose · A/D adjust · Enter toggle · Esc back · click − / +',
+    onClose,
+  });
+}
+
+const lastToast = new WeakMap<Phaser.Scene, Phaser.GameObjects.Text>();
+
+/** Short message; a new one replaces the previous. In matches it sits above the fighter cards. */
 export function toast(scene: Phaser.Scene, msg: string): void {
-  const t = displayText(scene, GAME_WIDTH / 2, GAME_HEIGHT - 40, msg, 20, '#ffffff', UI.inkCss, 6).setDepth(1000).setScrollFactor(0);
-  scene.tweens.add({ targets: t, alpha: 0, y: GAME_HEIGHT - 70, delay: 700, duration: 400, onComplete: () => t.destroy() });
+  lastToast.get(scene)?.destroy();
+  const y = scene.scene.key === 'Battle' ? 132 : GAME_HEIGHT - 40;
+  const t = displayText(scene, GAME_WIDTH / 2, y, msg, 20, '#ffffff', UI.inkCss, 6).setDepth(1000).setScrollFactor(0);
+  lastToast.set(scene, t);
+  scene.tweens.add({ targets: t, alpha: 0, y: y - 30, delay: 700, duration: 400, onComplete: () => t.destroy() });
   scene.events.emit('ui-object', t);
 }
 
 export function fadeTo(scene: Phaser.Scene, key: string, data?: object): void {
   scene.cameras.main.fadeOut(220, 13, 11, 31);
-  scene.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => scene.scene.start(key, data));
+  // Always pass an object: Phaser reuses a scene's previous start data when given none.
+  scene.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => scene.scene.start(key, data ?? {}));
 }

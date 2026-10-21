@@ -1,13 +1,13 @@
 import Phaser from 'phaser';
 import {
-  createMatch, FIGHTERS, getStage, standings, stepMatch,
+  createMatch, DUMMY_BEHAVIOR_LABEL, emptyInput, FIGHTERS, getStage, standings, stepMatch, TRAINING_RULES,
   type FighterState, type GameEvent, type MatchState, type StageCamera,
 } from '@arena-rush/shared';
 import { music } from '../audio/music';
 import { sound } from '../audio/sound';
 import { stageTrack } from '../audio/tracks';
 import { CpuInputSource } from '../input/cpu';
-import { KeyboardInputSource, P1_KEYS } from '../input/keyboard';
+import { keyboard, KeyboardInputSource, P1_KEYS } from '../input/keyboard';
 import type { InputSource } from '../input/source';
 import { FIGHTER_UI_COLOR, shade } from '../render/art';
 import { Backdrop, drawStage } from '../render/backdrop';
@@ -17,8 +17,9 @@ import { FighterView } from '../render/FighterView';
 import { ProjectileView } from '../render/projectiles';
 import { previewFrame } from '../anim/controller';
 import { damageColor, FONT_BODY, GAME_HEIGHT, GAME_WIDTH, UI } from '../theme';
-import { bodyText, displayText, installGlobalKeys, panel } from '../ui/widgets';
-import { isAltCostume, slotColor, slotCss, slotDescription, slotLabel, type MatchSetup, type MatchSummary } from './types';
+import { COMBO_WINDOWS, stepDamagePreset, TrainingSession } from '../training/session';
+import { bodyText, displayText, installGlobalKeys, openOptionsPanel, panel, toast, type OptionsPanel } from '../ui/widgets';
+import { isAltCostume, isTraining, slotColor, slotCss, slotDescription, slotLabel, type MatchSetup, type MatchSummary } from './types';
 
 const STEP_MS = 1000 / 60;
 
@@ -57,6 +58,11 @@ export class BattleScene extends Phaser.Scene {
   private offscreenLabels: Phaser.GameObjects.Text[] = [];
   private pauseOverlay!: Phaser.GameObjects.Container;
   private popups: Phaser.GameObjects.Text[] = [];
+  /** Training Mode only. */
+  private training: TrainingSession | null = null;
+  private trainingPanel: OptionsPanel | null = null;
+  private trainingHud: { combo: Phaser.GameObjects.Text; detail: Phaser.GameObjects.Text; dummy: Phaser.GameObjects.Text; recent: Phaser.GameObjects.Text } | null = null;
+  private comboWasActive = false;
   /** HUD portraits and off-screen bubbles, drawn with the same renderer as the match. */
   private hudFigures!: FigureCache;
 
@@ -80,12 +86,30 @@ export class BattleScene extends Phaser.Scene {
     const stage = getStage(this.setup.stage);
     this.camBounds = stage.camera;
     this.cam = { x: stage.camera.centerX, y: stage.camera.centerY, zoom: 1 };
-    this.match = createMatch(this.setup.players, { seed: (Date.now() ^ (Math.random() * 1e9)) >>> 0, stage });
+    const seed = (Date.now() ^ (Math.random() * 1e9)) >>> 0;
+    const training = isTraining(this.setup);
+    // Training uses the same simulation with unlimited stocks and no clock; versus rules are untouched.
+    this.match = createMatch(this.setup.players, { seed, stage, rules: training ? TRAINING_RULES : undefined });
     // Every fighter is driven by an InputSource: the keyboard for the human, the CPU brain for the computer.
+    // (In training the dummy is driven by the TrainingSession instead.)
     this.sources = this.setup.players.map((slot, i): InputSource =>
       slot.control === 'cpu'
         ? new CpuInputSource(i, slot.difficulty, () => this.match, (Math.random() * 2 ** 32) >>> 0)
-        : new KeyboardInputSource(P1_KEYS));
+        : slot.control === 'dummy'
+          ? { poll: () => emptyInput() }
+          : new KeyboardInputSource(P1_KEYS));
+    this.trainingPanel = null;
+    this.trainingHud = null;
+    this.comboWasActive = false;
+    this.training = training
+      ? new TrainingSession(
+        this.match,
+        this.setup.players.findIndex((p) => p.control === 'human'),
+        this.setup.players.findIndex((p) => p.control === 'dummy'),
+        {},
+        seed,
+      )
+      : null;
 
     this.world = this.add.layer();
     this.hud = this.add.layer();
@@ -135,9 +159,11 @@ export class BattleScene extends Phaser.Scene {
     };
 
     add(panel(this, GAME_WIDTH / 2, 38, 150, 56, UI.ink, 0xffffff, 0.85, 14));
-    this.timerText = add(displayText(this, GAME_WIDTH / 2, 38, '5:00', 32, '#ffffff', UI.inkCss, 0));
-    add(bodyText(this, 16, 16, 'Esc pause · M mute', 13, 'rgba(255,255,255,0.65)', '500').setOrigin(0, 0));
-    add(bodyText(this, GAME_WIDTH - 16, 16, 'YOU vs CPU', 13, 'rgba(255,255,255,0.65)', '900').setOrigin(1, 0));
+    this.timerText = add(displayText(this, GAME_WIDTH / 2, 38, this.training ? 'TRAINING' : '5:00', this.training ? 20 : 32, this.training ? '#7ef9a0' : '#ffffff', UI.inkCss, 0));
+    add(bodyText(this, 16, 16, this.training ? 'Esc training menu · R reset positions · T reset dummy % · B dummy behavior · M mute' : 'Esc pause · M mute',
+      13, 'rgba(255,255,255,0.65)', '500').setOrigin(0, 0));
+    add(bodyText(this, GAME_WIDTH - 16, 16, this.training ? 'YOU vs DUMMY' : 'YOU vs CPU', 13, 'rgba(255,255,255,0.65)', '900').setOrigin(1, 0));
+    if (this.training) this.buildTrainingHud(add);
 
     const n = this.match.fighters.length;
     this.match.fighters.forEach((f, i) => {
@@ -155,7 +181,9 @@ export class BattleScene extends Phaser.Scene {
       bg.fillCircle(-96, 0, 38);
       bg.lineStyle(3, 0xffffff, 0.9);
       bg.strokeCircle(-96, 0, 38);
-      const tag = displayText(this, -118, -36, slotLabel(this.setup, i), 16, slotCss(this.setup, i), UI.inkCss, 5);
+      // The dummy's card already says TRAINING DUMMY, and a long tag would sit under the portrait.
+      const label = slotLabel(this.setup, i);
+      const tag = displayText(this, -118, -36, label.length > 3 ? '' : label, 16, slotCss(this.setup, i), UI.inkCss, 5);
       const role = this.add.text(-50, -48 + 4, slotDescription(this.setup, i), {
         fontFamily: FONT_BODY, fontSize: '10px', fontStyle: '900', color: slotCss(this.setup, i),
       }).setOrigin(0, 0);
@@ -182,6 +210,133 @@ export class BattleScene extends Phaser.Scene {
     this.pauseOverlay = add(this.add.container(GAME_WIDTH / 2, GAME_HEIGHT / 2, [dim, pt, ph]).setVisible(false));
   }
 
+  private buildTrainingHud(add: <T extends Phaser.GameObjects.GameObject>(o: T) => T): void {
+    const x = 16;
+    const y = 46;
+    const bg = add(this.add.graphics());
+    bg.fillStyle(UI.ink, 0.55);
+    bg.fillRoundedRect(x - 6, y - 6, 300, 122, 12);
+    const combo = add(displayText(this, x + 4, y + 16, '', 26, '#ffd23f', UI.inkCss, 6).setOrigin(0, 0.5));
+    const detail = add(bodyText(this, x + 4, y + 44, '', 13, '#ffffff', '700').setOrigin(0, 0.5));
+    const dummy = add(bodyText(this, x + 4, y + 66, '', 13, '#ffffff', '700').setOrigin(0, 0.5));
+    const recent = add(bodyText(this, x + 4, y + 92, '', 12, '#b9b4e6', '700').setOrigin(0, 0.5));
+    this.trainingHud = { combo, detail, dummy, recent };
+  }
+
+  private updateTrainingHud(): void {
+    const t = this.training;
+    const h = this.trainingHud;
+    if (!t || !h) return;
+    const c = t.combo;
+    const on = t.settings.comboCounter;
+    h.combo.setVisible(on).setText(c.hits > 0 ? `${c.hits} HIT${c.hits === 1 ? '' : 'S'}` : 'COMBO —');
+    h.combo.setColor(c.active ? '#ffd23f' : '#b9b4e6');
+    h.detail.setVisible(on).setText(`Combo ${c.damage.toFixed(1)}%  ·  Last hit ${c.lastDamage.toFixed(1)}%  ·  Best ${c.best}`);
+    const d = this.match.fighters[t.dummyId];
+    h.dummy.setText(`Dummy ${FIGHTERS[d.fighter].name} ${Math.round(d.damage)}%  ·  ${DUMMY_BEHAVIOR_LABEL[t.settings.behavior]}`);
+    h.recent.setText(t.recent.length ? `You: ${t.recent.join(' › ')}` : 'You: —');
+    // Celebrate a finished combo of 2+ hits.
+    if (on && this.comboWasActive && !c.active && c.hits >= 2) this.popup(`${c.hits} HIT COMBO!`, d.x, d.y - 120, '#ffd23f');
+    this.comboWasActive = c.active;
+  }
+
+  private openTrainingMenu(): void {
+    const t = this.training;
+    if (!t || this.trainingPanel) return;
+    this.paused = true;
+    t.paused = true;
+    music.duck(true);
+    let entry: string | null = null;
+    const onOff = (v: boolean) => (v ? 'ON' : 'OFF');
+    this.trainingPanel = openOptionsPanel(this, {
+      title: 'TRAINING',
+      width: 680,
+      rowH: 46,
+      rows: [
+        {
+          label: 'DUMMY BEHAVIOR',
+          value: () => `◀  ${DUMMY_BEHAVIOR_LABEL[t.settings.behavior]}  ▶`,
+          adjust: (d) => t.cycleBehavior(d),
+        },
+        {
+          label: 'DUMMY DAMAGE',
+          value: () => (entry !== null ? `${entry || '0'}_ %` : `◀  ${Math.round(t.dummyDamage)}%  ▶`),
+          adjust: (d) => {
+            entry = null;
+            t.setDummyDamage(stepDamagePreset(Math.round(t.dummyDamage), d));
+          },
+          // Type any value 0–999; it applies as you type.
+          onKey: (e) => {
+            const digit = /^(?:Digit|Numpad)(\d)$/.exec(e.code)?.[1];
+            if (digit !== undefined) {
+              entry = ((entry ?? '') + digit).replace(/^0+(?=\d)/, '').slice(0, 3);
+              t.setDummyDamage(Number(entry));
+              sound.menuMove();
+              return true;
+            }
+            if (e.code === 'Backspace' && entry !== null) {
+              entry = entry.slice(0, -1);
+              t.setDummyDamage(Number(entry || 0));
+              return true;
+            }
+            if (entry !== null && e.code !== 'ArrowLeft' && e.code !== 'ArrowRight' && e.code !== 'KeyA' && e.code !== 'KeyD') entry = null;
+            return false;
+          },
+        },
+        { label: 'RESET DUMMY DAMAGE', value: () => 'Enter', valueColor: () => UI.muted, press: () => t.resetDummyDamage() },
+        { label: 'RESET POSITIONS', value: () => 'Enter', valueColor: () => UI.muted, press: () => this.resetTrainingPositions(false) },
+        {
+          label: 'COMBO COUNTER',
+          value: () => onOff(t.settings.comboCounter),
+          press: () => { t.settings.comboCounter = !t.settings.comboCounter; },
+          adjust: () => { t.settings.comboCounter = !t.settings.comboCounter; },
+        },
+        {
+          label: 'COMBO WINDOW',
+          value: () => `◀  ${COMBO_WINDOWS[t.settings.comboWindow].label}  ▶`,
+          adjust: (d) => t.setComboWindow(t.settings.comboWindow + d),
+        },
+        {
+          label: 'HITBOXES',
+          value: () => onOff(this.debug),
+          press: () => this.setHitboxes(!this.debug),
+          adjust: () => this.setHitboxes(!this.debug),
+        },
+        { label: 'RESUME', press: () => this.trainingPanel?.close() },
+        { label: 'CHANGE FIGHTERS', press: () => this.leaveTraining('Select') },
+        { label: 'EXIT TO MAIN MENU', press: () => this.leaveTraining('Menu') },
+      ],
+      hint: 'W/S choose · A/D change · type digits for a custom % · Enter select · Esc resume',
+      onClose: () => {
+        this.trainingPanel = null;
+        this.paused = false;
+        t.paused = false;
+        this.acc = 0;
+        keyboard.flush();
+        music.duck(false);
+      },
+    });
+  }
+
+  private setHitboxes(on: boolean): void {
+    this.debug = on;
+    if (this.training) this.training.settings.hitboxes = on;
+  }
+
+  private resetTrainingPositions(announce = true): void {
+    if (!this.training) return;
+    this.training.resetPositions();
+    this.comboWasActive = false;
+    this.cameras.main.flash(120, 255, 255, 255);
+    sound.respawn();
+    if (announce) toast(this, 'POSITIONS RESET');
+  }
+
+  private leaveTraining(scene: 'Menu' | 'Select'): void {
+    music.duck(false);
+    this.scene.start(scene, scene === 'Select' ? { previous: this.setup } : {});
+  }
+
   private showCenter(text: string, color: string, duration = 700, size = 120): void {
     const t = this.centerText;
     this.tweens.killTweensOf(t);
@@ -206,11 +361,12 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private updateHud(): void {
+    this.updateTrainingHud();
     const secs = Math.ceil(this.match.timeLeft / 60);
     const m = Math.floor(secs / 60);
     const s = secs % 60;
-    this.timerText.setText(`${m}:${s.toString().padStart(2, '0')}`);
-    const urgent = secs <= 10 && this.match.phase === 'playing';
+    if (!this.training) this.timerText.setText(`${m}:${s.toString().padStart(2, '0')}`);
+    const urgent = secs <= 10 && this.match.phase === 'playing' && this.match.rules.timed;
     this.timerText.setColor(urgent ? '#ff4d5e' : '#ffffff');
     this.timerText.setScale(urgent ? 1 + Math.max(0, Math.sin(this.frameCount * 0.2)) * 0.12 : 1);
 
@@ -229,7 +385,7 @@ export class BattleScene extends Phaser.Scene {
       card.container.setAlpha(f.eliminated ? 0.45 : 1);
 
       card.stocks.clear();
-      for (let k = 0; k < this.match.rules.stocks; k++) {
+      for (let k = 0; k < (this.match.rules.infiniteStocks ? 0 : this.match.rules.stocks); k++) {
         const filled = k < f.stocks;
         card.stocks.fillStyle(filled ? FIGHTER_UI_COLOR[f.fighter] : 0x000000, filled ? 1 : 0.3);
         card.stocks.fillCircle(-42 + k * 20, -6, 7);
@@ -275,6 +431,10 @@ export class BattleScene extends Phaser.Scene {
   // ---------------------------------------------------------------------------
 
   private onKey(code: string): void {
+    if (this.training) {
+      this.onTrainingKey(code);
+      return;
+    }
     if (code === 'Escape' && this.match.phase !== 'ended') {
       this.paused = !this.paused;
       this.pauseOverlay.setVisible(this.paused);
@@ -288,7 +448,24 @@ export class BattleScene extends Phaser.Scene {
       this.scene.restart({ setup: this.setup });
     } else if (this.paused && code === 'KeyQ') {
       music.duck(false);
-      this.scene.start('Menu');
+      this.scene.start('Menu', {});
+    }
+  }
+
+  private onTrainingKey(code: string): void {
+    const t = this.training!;
+    if (this.trainingPanel) return; // the panel handles its own keys (including Esc to close)
+    if (code === 'Escape') this.openTrainingMenu();
+    else if (code === 'Backquote') this.setHitboxes(!this.debug);
+    else if (code === 'KeyR') this.resetTrainingPositions();
+    else if (code === 'KeyT') {
+      t.resetDummyDamage();
+      sound.menuSelect();
+      toast(this, 'DUMMY DAMAGE 0%');
+    } else if (code === 'KeyB') {
+      const b = t.cycleBehavior(1);
+      sound.menuMove();
+      toast(this, `DUMMY: ${DUMMY_BEHAVIOR_LABEL[b].toUpperCase()}`);
     }
   }
 
@@ -331,8 +508,9 @@ export class BattleScene extends Phaser.Scene {
 
   private tick(): void {
     this.frameCount++;
-    const inputs = this.sources.map((s) => s.poll());
-    const events = stepMatch(this.match, inputs);
+    const events = this.training
+      ? this.training.step(this.sources[this.training.playerId].poll())
+      : stepMatch(this.match, this.sources.map((s) => s.poll()));
     for (const e of events) this.handleEvent(e);
     this.views.forEach((v, i) => v.tick(this.match.fighters[i]));
     this.effects.tick();

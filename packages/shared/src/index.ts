@@ -7,3 +7,4 @@ export * from './fighters';
 export * from './combat';
 export * from './match';
 export * from './cpu';
+export * from './training';

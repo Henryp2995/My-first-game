@@ -37,6 +37,11 @@ class KeyboardState {
     window.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false });
   }
 
+  /** Forget keys pressed while the game wasn't listening (e.g. in a pause menu). */
+  flush(): void {
+    this.tapped.clear();
+  }
+
   private reset(): void {
     this.down.clear();
     this.tapped.clear();

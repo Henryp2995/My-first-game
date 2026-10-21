@@ -5,7 +5,7 @@ import { sound } from '../audio/sound';
 import { Backdrop, drawStagePreview } from '../render/backdrop';
 import { GAME_HEIGHT, GAME_WIDTH, PLAYER_CSS, UI } from '../theme';
 import { bodyText, displayText, fadeTo, installGlobalKeys } from '../ui/widgets';
-import { slotCss, slotDescription, type MatchSetup } from './types';
+import { slotCss, slotDescription, slotLabel, type MatchSetup } from './types';
 
 const CARD_W = 370;
 const CARD_H = 380;
@@ -50,15 +50,16 @@ export class StageSelectScene extends Phaser.Scene {
     const vs = this.add.text(GAME_WIDTH / 2, 84, '', { fontFamily: 'Rubik, sans-serif', fontSize: '16px', fontStyle: '900', color: '#ffffff' }).setOrigin(0.5);
     vs.setText(`${FIGHTERS[p1.fighter].name.toUpperCase()}   vs   ${FIGHTERS[cpu.fighter].name.toUpperCase()}  (${slotDescription(this.setup, 1)})`);
     bodyText(this, GAME_WIDTH / 2 - vs.width / 2 - 26, 84, 'P1', 15, PLAYER_CSS[0], '900');
-    bodyText(this, GAME_WIDTH / 2 + vs.width / 2 + 30, 84, 'CPU', 15, slotCss(this.setup, 1), '900');
+    if (this.setup.mode !== 'training') bodyText(this, GAME_WIDTH / 2 + vs.width / 2 + 14, 84, slotLabel(this.setup, 1), 15, slotCss(this.setup, 1), '900').setOrigin(0, 0.5);
+    if (this.setup.mode === 'training') displayText(this, 110, 40, 'TRAINING', 22, '#7ef9a0', UI.inkCss, 6);
 
     STAGE_ORDER.forEach((id, i) => this.buildCard(id, i));
     this.cursor = this.add.graphics();
 
     this.buildButton('◀  BACK', GAME_WIDTH / 2 - 170, 220, false, () => this.back());
-    this.buildButton('FIGHT!', GAME_WIDTH / 2 + 170, 260, true, () => this.confirm());
+    this.buildButton(this.setup.mode === 'training' ? 'PRACTICE!' : 'FIGHT!', GAME_WIDTH / 2 + 170, 260, true, () => this.confirm());
 
-    bodyText(this, GAME_WIDTH / 2, 700, 'A / D  choose   ·   F / Enter  fight   ·   G / Esc  back to characters   ·   mouse works too', 13, 'rgba(255,255,255,0.65)', '500');
+    bodyText(this, GAME_WIDTH / 2, 700, `A / D  choose   ·   F / Enter  ${this.setup.mode === 'training' ? 'start' : 'fight'}   ·   G / Esc  back to characters   ·   mouse works too`, 13, 'rgba(255,255,255,0.65)', '500');
 
     this.input.keyboard?.on('keydown', (e: KeyboardEvent) => {
       if (this.leaving) return;

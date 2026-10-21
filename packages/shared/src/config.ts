@@ -8,6 +8,10 @@ export const DT = 1 / FPS;
  */
 export interface RulesConfig {
   stocks: number;
+  /** Training: KOs never cost a stock, so nobody is ever eliminated. */
+  infiniteStocks: boolean;
+  /** False = no match clock (training). */
+  timed: boolean;
   /** Match length in frames (5 minutes by default). */
   matchFrames: number;
   /** "3, 2, 1, GO!" before fighters can move. */
@@ -101,6 +105,8 @@ export interface RulesConfig {
 
 export const DEFAULT_RULES: RulesConfig = {
   stocks: 3,
+  infiniteStocks: false,
+  timed: true,
   matchFrames: 5 * 60 * FPS,
   countdownFrames: 3 * FPS,
   respawnDelayFrames: 70,

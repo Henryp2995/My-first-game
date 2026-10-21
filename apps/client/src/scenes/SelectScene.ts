@@ -11,11 +11,15 @@ import { Backdrop } from '../render/backdrop';
 import { previewFrame } from '../anim/controller';
 import { CPU_COLOR, CPU_CSS, FONT_BODY, GAME_HEIGHT, GAME_WIDTH, PLAYER_COLORS, PLAYER_CSS, UI } from '../theme';
 import { bodyText, displayText, fadeTo, installGlobalKeys, panel } from '../ui/widgets';
-import type { MatchSetup } from './types';
+import { trainingSetup, type GameMode, type MatchSetup } from './types';
 
-/** Player vs CPU setup flow: pick your fighter → pick the CPU's fighter → pick CPU difficulty → stage select. */
+/**
+ * Setup flow. Player vs CPU: your fighter → the CPU's fighter → CPU difficulty → stage select.
+ * Training: your fighter → the training dummy's fighter → stage select (the 'cpu' step picks the dummy).
+ */
 type Step = 'player' | 'cpu' | 'difficulty';
-const STEPS: Step[] = ['player', 'cpu', 'difficulty'];
+const VERSUS_STEPS: Step[] = ['player', 'cpu', 'difficulty'];
+const TRAINING_STEPS: Step[] = ['player', 'cpu'];
 
 const STEP_TITLE: Record<Step, string> = {
   player: 'CHOOSE YOUR FIGHTER',
@@ -81,13 +85,15 @@ export class SelectScene extends Phaser.Scene {
   private leaving = false;
   private t = 0;
   private previous: MatchSetup | null = null;
+  private mode: GameMode = 'versus';
 
   constructor() {
     super('Select');
   }
 
-  init(data: { previous?: MatchSetup }): void {
+  init(data: { previous?: MatchSetup; mode?: GameMode }): void {
     this.previous = data?.previous ?? null;
+    this.mode = data?.mode ?? this.previous?.mode ?? 'versus';
   }
 
   create(): void {
@@ -107,7 +113,7 @@ export class SelectScene extends Phaser.Scene {
 
     // Restore the last match's picks (when coming back from Results or stage select).
     const prevHuman = this.previous?.players.find((p) => p.control === 'human');
-    const prevCpu = this.previous?.players.find((p) => p.control === 'cpu');
+    const prevCpu = this.previous?.players.find((p) => p.control !== 'human');
     this.playerIndex = prevHuman ? Math.max(0, FIGHTER_ORDER.indexOf(prevHuman.fighter)) : 0;
     this.cpuIndex = prevCpu ? Math.max(0, FIGHTER_ORDER.indexOf(prevCpu.fighter)) : 2;
     this.difficulty = prevCpu?.control === 'cpu' ? CPU_DIFFICULTIES.indexOf(prevCpu.difficulty) : 1;
@@ -118,7 +124,7 @@ export class SelectScene extends Phaser.Scene {
     FIGHTER_ORDER.forEach((id, i) => this.buildCard(id, i));
     this.cursorGfx = this.add.graphics();
     this.badges.push(displayText(this, 0, 0, 'P1', 18, '#ffffff', shadeCss(PLAYER_COLORS[0]), 0));
-    this.badges.push(displayText(this, 0, 0, 'CPU', 16, '#ffffff', shadeCss(CPU_COLOR), 0));
+    this.badges.push(displayText(this, 0, 0, this.training ? 'DUMMY' : 'CPU', 16, '#ffffff', shadeCss(CPU_COLOR), 0));
 
     this.buildDetailPanel(0);
     this.buildDetailPanel(1);
@@ -129,7 +135,7 @@ export class SelectScene extends Phaser.Scene {
       this.pillText.push(bodyText(this, pillX(k), PILL_Y, CPU_PROFILES[d].label.toUpperCase(), 12, '#ffffff', '900'));
       const zone = this.add.zone(pillX(k), PILL_Y, 84, 26).setInteractive({ useHandCursor: true });
       zone.on('pointerdown', () => {
-        if (this.step === 'player') return;
+        if (this.step === 'player' || this.training) return;
         this.difficulty = k;
         this.step = 'difficulty';
         this.advance();
@@ -199,9 +205,9 @@ export class SelectScene extends Phaser.Scene {
     const g = this.add.graphics();
     g.fillStyle(shade(color, 0.35), 1);
     g.fillRoundedRect(left + 14, PANEL_Y - PANEL_H / 2 + 14, 170, PANEL_H - 28, 12);
-    displayText(this, left + 46, PANEL_Y - PANEL_H / 2 + 34, who === 0 ? 'P1' : 'CPU', who === 0 ? 24 : 20,
+    displayText(this, left + 46 + (who === 1 && this.training ? 14 : 0), PANEL_Y - PANEL_H / 2 + 34, who === 0 ? 'P1' : this.training ? 'DUMMY' : 'CPU', who === 0 ? 24 : this.training ? 16 : 20,
       who === 0 ? PLAYER_CSS[0] : CPU_CSS, UI.inkCss, 5);
-    bodyText(this, left + 140, PANEL_Y - PANEL_H / 2 + 34, who === 0 ? 'YOU' : 'COMPUTER', 11, who === 0 ? PLAYER_CSS[0] : CPU_CSS, '900');
+    bodyText(this, left + 140, PANEL_Y - PANEL_H / 2 + 34, who === 0 ? 'YOU' : this.training ? 'TRAINING' : 'COMPUTER', 11, who === 0 ? PLAYER_CSS[0] : CPU_CSS, '900');
     const tx = left + 210;
     const name = this.add.text(tx, PANEL_Y - PANEL_H / 2 + 22, '', { fontFamily: '"Bungee", "Arial Black", sans-serif', fontSize: '26px', color: '#ffffff', stroke: UI.inkCss, strokeThickness: 5 });
     const tagline = this.add.text(tx, PANEL_Y - PANEL_H / 2 + 62, '', { fontFamily: FONT_BODY, fontSize: '14px', fontStyle: '700', color: UI.muted });
@@ -227,6 +233,14 @@ export class SelectScene extends Phaser.Scene {
     else if (KEYS.back.includes(code)) this.goBack();
   }
 
+  private get training(): boolean {
+    return this.mode === 'training';
+  }
+
+  private get steps(): Step[] {
+    return this.training ? TRAINING_STEPS : VERSUS_STEPS;
+  }
+
   private move(d: number): void {
     if (this.step === 'player') this.playerIndex = wrap(this.playerIndex + d, N);
     else if (this.step === 'cpu') this.cpuIndex = wrap(this.cpuIndex + d, N);
@@ -245,24 +259,29 @@ export class SelectScene extends Phaser.Scene {
       const flash = this.add.circle(x, ROSTER_Y - 20, 30, who === 0 ? PLAYER_COLORS[0] : CPU_COLOR, 0.8);
       this.tweens.add({ targets: flash, radius: 110, alpha: 0, duration: 350, onComplete: () => flash.destroy() });
     }
-    if (this.step === 'difficulty') {
+    const next = this.steps[this.steps.indexOf(this.step) + 1];
+    if (!next) {
       this.toStageSelect();
       return;
     }
-    this.step = STEPS[STEPS.indexOf(this.step) + 1];
+    this.step = next;
     this.refresh();
   }
 
   private goBack(): void {
-    const i = STEPS.indexOf(this.step);
+    const i = this.steps.indexOf(this.step);
     if (i === 0) return;
     sound.menuBack();
-    this.step = STEPS[i - 1];
+    this.step = this.steps[i - 1];
     this.refresh();
   }
 
   private toStageSelect(): void {
     this.leaving = true;
+    if (this.training) {
+      fadeTo(this, 'StageSelect', { setup: trainingSetup(FIGHTER_ORDER[this.playerIndex], FIGHTER_ORDER[this.cpuIndex], this.previous?.stage) });
+      return;
+    }
     const setup: MatchSetup = {
       players: [
         { fighter: FIGHTER_ORDER[this.playerIndex], control: 'human' },
@@ -274,10 +293,13 @@ export class SelectScene extends Phaser.Scene {
   }
 
   private refresh(): void {
-    const at = STEPS.indexOf(this.step);
-    this.title.setText(STEP_TITLE[this.step]);
+    const at = this.steps.indexOf(this.step);
+    this.title.setText(this.training && this.step === 'cpu' ? 'CHOOSE THE TRAINING DUMMY' : STEP_TITLE[this.step]);
     this.subtitle.setText(
-      this.step === 'player' ? 'Step 1 of 3  ·  Pick the fighter YOU will control'
+      this.training ? (this.step === 'player'
+        ? 'TRAINING  ·  Step 1 of 2  ·  Pick the fighter YOU will practice with'
+        : 'TRAINING  ·  Step 2 of 2  ·  Pick the dummy\'s fighter (it stands still by default), then a stage')
+      : this.step === 'player' ? 'Step 1 of 3  ·  Pick the fighter YOU will control'
         : this.step === 'cpu' ? 'Step 2 of 3  ·  Pick the fighter the CPU will control (mirror matches allowed)'
           : 'Step 3 of 3  ·  Choose how tough the CPU is, then pick a stage',
     );
@@ -308,12 +330,15 @@ export class SelectScene extends Phaser.Scene {
       });
       const locked = who === 0 ? at > 0 : at > 1;
       if (who === 0) d.status.setText(locked ? '✔ LOCKED IN' : 'Choosing…').setColor(locked ? '#7ff08f' : UI.muted);
+      else if (this.training) d.status.setText(at === 1 ? 'Choosing training dummy…' : '').setColor(UI.muted);
       else d.status.setText(at < 2 ? (at === 1 ? 'Choosing fighter…' : '') : `${CPU_PROFILES[CPU_DIFFICULTIES[this.difficulty]].label}: ${DIFFICULTY_BLURB[CPU_DIFFICULTIES[this.difficulty]]}`)
         .setColor(at === 2 ? '#ffd23f' : UI.muted);
     });
 
     const g = this.pillGfx;
     g.clear();
+    this.pillText.forEach((t) => t.setVisible(!this.training));
+    if (this.training) return;
     CPU_DIFFICULTIES.forEach((_, k) => {
       const selected = k === this.difficulty;
       const active = this.step === 'difficulty';
@@ -330,7 +355,7 @@ export class SelectScene extends Phaser.Scene {
   update(): void {
     this.t++;
     this.backdrop.update();
-    const at = STEPS.indexOf(this.step);
+    const at = this.steps.indexOf(this.step);
 
     // Roster previews: a fighter strikes its victory pose right after being picked.
     this.figures.begin();
@@ -358,7 +383,7 @@ export class SelectScene extends Phaser.Scene {
     const pulse = 0.6 + Math.sin(this.t * 0.15) * 0.4;
     const cursors = [
       { index: this.playerIndex, color: PLAYER_COLORS[0], label: 'P1', locked: at > 0, visible: true },
-      { index: this.cpuIndex, color: CPU_COLOR, label: 'CPU', locked: at > 1, visible: at >= 1 },
+      { index: this.cpuIndex, color: CPU_COLOR, label: this.training ? 'DUMMY' : 'CPU', locked: at > 1, visible: at >= 1 },
     ];
     cursors.forEach((c, p) => {
       this.badges[p].setVisible(c.visible);
@@ -371,7 +396,7 @@ export class SelectScene extends Phaser.Scene {
       g.strokeRoundedRect(x - w / 2, ROSTER_Y - h / 2, w, h, 16);
       const bx = x + (p === 0 ? -CARD_W / 2 + 26 : CARD_W / 2 - 30);
       const by = ROSTER_Y - CARD_H / 2 - 2;
-      const bw = p === 0 ? 46 : 56;
+      const bw = p === 0 ? 46 : this.training ? 78 : 56;
       g.fillStyle(c.color, 1);
       g.fillRoundedRect(bx - bw / 2, by - 14, bw, 28, 8);
       g.lineStyle(2, 0xffffff, 1);

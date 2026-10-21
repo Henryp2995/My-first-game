@@ -316,7 +316,7 @@ export function stepMatch(m: MatchState, inputs: InputFrame[]): GameEvent[] {
     }
   }
 
-  m.timeLeft = Math.max(0, m.timeLeft - 1);
+  if (m.rules.timed) m.timeLeft = Math.max(0, m.timeLeft - 1);
   checkMatchEnd(m);
   return m.events;
 }
@@ -1073,14 +1073,14 @@ export function koFighter(m: MatchState, f: FighterState): void {
   });
   if (f.lastHitBy !== null && f.lastHitBy !== f.id) m.fighters[f.lastHitBy].stats.kos++;
   f.stats.falls++;
-  f.stocks = Math.max(0, f.stocks - 1);
+  if (!m.rules.infiniteStocks) f.stocks = Math.max(0, f.stocks - 1);
   f.action = 'dead';
   f.move = null;
   f.vx = f.vy = f.kbx = f.kby = 0;
   f.hitstun = 0;
   f.hitstop = 0;
   f.lastHitBy = null;
-  if (f.stocks <= 0) {
+  if (f.stocks <= 0 && !m.rules.infiniteStocks) {
     f.eliminated = true;
     f.eliminatedAt = m.frame;
     m.events.push({ type: 'eliminated', id: f.id });
@@ -1116,7 +1116,7 @@ function checkMatchEnd(m: MatchState): void {
   const alive = m.fighters.filter((f) => !f.eliminated);
   if (alive.length <= 1) {
     endMatch(m, alive[0]?.id ?? null, 'stocks');
-  } else if (m.timeLeft <= 0) {
+  } else if (m.rules.timed && m.timeLeft <= 0) {
     const ranked = standings(m);
     const [a, b] = ranked;
     const tie = a.stocks === b.stocks && a.damage === b.damage && !a.eliminated && !b.eliminated;

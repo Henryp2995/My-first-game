@@ -45,7 +45,8 @@ export class MenuScene extends Phaser.Scene {
     displayText(this, 330, 185, 'PLATFORM  FIGHTER', 20, '#ffffff', UI.inkCss, 6).setLetterSpacing(4);
 
     this.menu = new Menu(this, 330, 290, [
-      { label: () => 'PLAYER VS CPU', hint: 'Pick your fighter, rival & difficulty', action: () => fadeTo(this, 'Select') },
+      { label: () => 'PLAYER VS CPU', hint: 'Pick your fighter, rival & difficulty', action: () => fadeTo(this, 'Select', { mode: 'versus' }) },
+      { label: () => 'TRAINING', hint: 'Practice on a dummy that won\'t fight back', action: () => fadeTo(this, 'Select', { mode: 'training' }) },
       { label: () => 'ONLINE PLAY', hint: 'Coming in Phase 3', action: () => fadeTo(this, 'Online') },
       { label: () => 'HOW TO PLAY', hint: 'Controls & rules', action: () => this.showHelp() },
       { label: () => `AUDIO${sound.muted ? ': MUTED' : ''}`, hint: 'Volume & mute · M mutes anytime', action: () => this.showAudio() },
@@ -102,10 +103,11 @@ export class MenuScene extends Phaser.Scene {
       'You (P1) vs the CPU · 3 stocks each · 5 minutes · knock the CPU past the dotted blast lines.',
       'Damage % goes up as you get hit — the higher it is, the farther you fly. CPU: Easy → Expert.',
       'Hold special to charge Luigi\'s rocket or Goku\'s Kamehameha · Spider-Man: special + ↑ in the air web-zips · Gundam has 3 jumps.',
+      'TRAINING: endless practice vs a dummy · Esc opens training settings · R resets positions · T resets dummy % · B changes dummy behavior.',
       'Esc pauses a match · M toggles sound (volumes under AUDIO) · ` (backtick) shows hitboxes.',
     ];
-    rules.forEach((line, i) => objs.push(bodyText(this, cx, cy + 140 + i * 26, line, 15, '#e8e5ff', '500')));
-    objs.push(displayText(this, cx, cy + 250, 'PRESS ESC OR CLICK TO CLOSE', 16, '#b9b4e6', UI.inkCss, 4));
+    rules.forEach((line, i) => objs.push(bodyText(this, cx, cy + 116 + i * 26, line, 15, '#e8e5ff', '500')));
+    objs.push(displayText(this, cx, cy + 256, 'PRESS ESC OR CLICK TO CLOSE', 16, '#b9b4e6', UI.inkCss, 4));
     dim.on('pointerdown', () => this.closeHelp());
     this.overlay = objs;
   }

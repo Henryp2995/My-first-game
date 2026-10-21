@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { FIGHTERS, getStage } from '@arena-rush/shared';
+import { music } from '../audio/music';
 import { sound } from '../audio/sound';
 import { shade } from '../render/art';
 import { FigureCache } from '../render/characters';
@@ -67,6 +68,8 @@ export class ResultsScene extends Phaser.Scene {
       displayText(this, 320, 150, def.name.toUpperCase(), def.name.length > 10 ? 32 : 40, '#ffffff', UI.inkCss, 8);
       sound.victory();
     }
+    // Let the fanfare ring out before the results theme comes in.
+    this.time.delayedCall(winner === null ? 300 : 1400, () => music.play('results'));
     const cpuIndex = s.setup.players.findIndex((p) => p.control === 'cpu');
     const vs = (cpuIndex >= 0 ? `  ·  vs ${slotDescription(s.setup, cpuIndex)}` : '') + `  ·  ${getStage(s.setup.stage).name}`;
     bodyText(this, 320, 196, (s.reason === 'time' ? 'Decided on time' : 'Last fighter standing') + vs, 15, UI.muted, '700');

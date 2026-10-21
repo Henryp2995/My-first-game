@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { music } from '../audio/music';
 import { Backdrop } from '../render/backdrop';
 import { GAME_HEIGHT, GAME_WIDTH, UI } from '../theme';
 import { bodyText, displayText, fadeTo, installGlobalKeys, Menu, panel } from '../ui/widgets';
@@ -18,6 +19,7 @@ export class OnlineScene extends Phaser.Scene {
     this.cameras.main.fadeIn(250, 13, 11, 31);
     this.backdrop = new Backdrop(this);
     installGlobalKeys(this);
+    music.play('menu');
     const cx = GAME_WIDTH / 2;
     panel(this, cx, GAME_HEIGHT / 2, 760, 560, UI.panel, 0xffffff, 0.95);
     displayText(this, cx, 120, 'ONLINE PLAY', 44, '#ffd23f');

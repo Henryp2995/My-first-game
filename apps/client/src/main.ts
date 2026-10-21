@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { keyboard } from './input/keyboard';
 import { sound } from './audio/sound';
+import { music } from './audio/music';
 import { GAME_HEIGHT, GAME_WIDTH } from './theme';
 import { BootScene } from './scenes/BootScene';
 import { MenuScene } from './scenes/MenuScene';
@@ -12,6 +13,7 @@ import { OnlineScene } from './scenes/OnlineScene';
 import { GalleryScene } from './scenes/GalleryScene';
 
 keyboard.install();
+// Browsers only allow audio after a user gesture; every key press / click (re)unlocks it.
 const unlock = () => sound.unlock();
 window.addEventListener('keydown', unlock);
 window.addEventListener('pointerdown', unlock);
@@ -28,10 +30,12 @@ const game = new Phaser.Game({
     autoCenter: Phaser.Scale.CENTER_BOTH,
   },
   fps: { target: 60 },
+  // The game has its own Web Audio system (audio/sound.ts); don't let Phaser open a second context.
+  audio: { noAudio: true },
   scene: new URLSearchParams(location.search).has('gallery')
     ? [GalleryScene]
     : [BootScene, MenuScene, SelectScene, StageSelectScene, BattleScene, ResultsScene, OnlineScene],
 });
 
 // Exposed for debugging in the browser console.
-(window as unknown as { arenaRush: Phaser.Game }).arenaRush = game;
+Object.assign(window, { arenaRush: game, arenaRushAudio: { sound, music } });

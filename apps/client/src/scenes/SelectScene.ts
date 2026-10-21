@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { music } from '../audio/music';
 import {
   CPU_DIFFICULTIES, CPU_PROFILES, FIGHTERS, FIGHTER_ORDER, weightRating,
   type CpuDifficulty, type FighterId,
@@ -101,6 +102,7 @@ export class SelectScene extends Phaser.Scene {
     this.cameras.main.fadeIn(250, 13, 11, 31);
     this.backdrop = new Backdrop(this);
     installGlobalKeys(this);
+    music.play('select');
     this.add.rectangle(GAME_WIDTH / 2, GAME_HEIGHT / 2, GAME_WIDTH, GAME_HEIGHT, 0x0d0b1f, 0.5);
 
     // Restore the last match's picks (when coming back from Results or stage select).

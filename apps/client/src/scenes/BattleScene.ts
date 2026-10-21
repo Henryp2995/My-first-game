@@ -3,7 +3,9 @@ import {
   createMatch, FIGHTERS, getStage, standings, stepMatch,
   type FighterState, type GameEvent, type MatchState, type StageCamera,
 } from '@arena-rush/shared';
+import { music } from '../audio/music';
 import { sound } from '../audio/sound';
+import { stageTrack } from '../audio/tracks';
 import { CpuInputSource } from '../input/cpu';
 import { KeyboardInputSource, P1_KEYS } from '../input/keyboard';
 import type { InputSource } from '../input/source';
@@ -117,6 +119,8 @@ export class BattleScene extends Phaser.Scene {
     this.hudCam.fadeIn(250, 13, 11, 31);
 
     installGlobalKeys(this);
+    music.duck(false);
+    music.play(stageTrack(stage.id));
     this.input.keyboard?.on('keydown', (e: KeyboardEvent) => this.onKey(e.code));
   }
 
@@ -276,12 +280,14 @@ export class BattleScene extends Phaser.Scene {
       this.pauseOverlay.setVisible(this.paused);
       if (this.paused) sound.menuBack();
       else sound.menuSelect();
+      music.duck(this.paused);
       this.acc = 0;
     } else if (code === 'Backquote') {
       this.debug = !this.debug;
     } else if (this.paused && code === 'KeyR') {
       this.scene.restart({ setup: this.setup });
     } else if (this.paused && code === 'KeyQ') {
+      music.duck(false);
       this.scene.start('Menu');
     }
   }
@@ -364,6 +370,7 @@ export class BattleScene extends Phaser.Scene {
       this.effects.burst(f.x, f.y - 38, 0x7ef9ff);
       this.effects.smoke(f.x, f.y - 38, 6);
     }
+    if (f.fighter === 'gundam' && f.action === 'run' && f.grounded && this.frameCount % 14 === 0) sound.mechStep();
     if (f.action === 'run' && f.grounded && this.frameCount % 12 === 0) {
       this.effects.dust(f.x - f.facing * 10, f.y, 1, -f.facing);
     }
@@ -383,11 +390,12 @@ export class BattleScene extends Phaser.Scene {
         }
         break;
       case 'jump':
-        sound.jump(e.double);
+        if (fighters[e.id].fighter === 'gundam') sound.thruster();
+        else sound.jump(e.double);
         this.effects.dust(e.x, e.y, e.double ? 3 : 5);
         break;
       case 'land':
-        sound.land();
+        sound.land(e.hard);
         if (e.hard) {
           this.effects.landImpact(e.x, e.y, 1000);
           this.cameras.main.shake(90, 0.003);
@@ -403,7 +411,7 @@ export class BattleScene extends Phaser.Scene {
           else if (who === 'goku') sound.beamCharge();
           else if (who === 'naruto') sound.rasengan();
           else if (who === 'vader') sound.choke();
-        } else if (saberUser) sound.saber();
+        } else if (saberUser) sound.saber(e.slot === 'heavy');
         else if (e.slot === 'heavy') sound.heavy();
         else sound.light();
         break;
@@ -422,7 +430,10 @@ export class BattleScene extends Phaser.Scene {
         }
         break;
       case 'projectileEnd':
-        if (!e.hit && e.kind !== 'batarang') this.effects.smoke(e.x, e.y, 4);
+        if (!e.hit && e.kind !== 'batarang') {
+          this.effects.smoke(e.x, e.y, 4);
+          sound.fizzle();
+        }
         break;
       case 'webzip': {
         sound.webzip();
@@ -454,7 +465,8 @@ export class BattleScene extends Phaser.Scene {
         sound.dodge();
         break;
       case 'hit': {
-        sound.hit(e.launchSpeed);
+        sound.hit(e.launchSpeed, `${e.attacker}>${e.victim}`);
+        if (e.launchSpeed > 1300) sound.launch(e.launchSpeed);
         this.effects.hit(e.x, e.y, e.launchSpeed, slotColor(this.setup, e.attacker), e.launchX, e.launchY);
         // Shake only for heavier hits, and keep it subtle so the action stays readable.
         const strength = Math.min(1, e.launchSpeed / 2000);
@@ -471,11 +483,15 @@ export class BattleScene extends Phaser.Scene {
         this.cards[e.id].shake = 30;
         break;
       }
+      case 'respawn':
+        sound.respawn();
+        break;
       case 'eliminated':
         this.popup(`${slotLabel(this.setup, e.id)} OUT!`, 0, -260, slotCss(this.setup, e.id));
         break;
       case 'matchEnd':
         sound.gameSet();
+        music.stop(1.2);
         this.showCenter(e.reason === 'time' ? 'TIME!' : 'GAME!', '#ffffff', 0, 140);
         this.endTimer = 150;
         break;

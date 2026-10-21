@@ -1,11 +1,12 @@
 import Phaser from 'phaser';
 import { FIGHTER_ORDER } from '@arena-rush/shared';
+import { music } from '../audio/music';
 import { sound } from '../audio/sound';
 import { FigureCache } from '../render/characters';
 import { Backdrop } from '../render/backdrop';
 import { previewFrame } from '../anim/controller';
 import { FONT_BODY, GAME_HEIGHT, GAME_WIDTH, UI } from '../theme';
-import { bodyText, displayText, fadeTo, installGlobalKeys, Menu, panel } from '../ui/widgets';
+import { bodyText, displayText, fadeTo, installGlobalKeys, Menu, openAudioSettings, panel } from '../ui/widgets';
 
 export class MenuScene extends Phaser.Scene {
   private backdrop!: Backdrop;
@@ -25,6 +26,7 @@ export class MenuScene extends Phaser.Scene {
     this.cameras.main.fadeIn(250, 13, 11, 31);
     this.backdrop = new Backdrop(this);
     installGlobalKeys(this);
+    music.play('menu');
 
     const shade = this.add.graphics();
     shade.fillGradientStyle(0x0d0b1f, 0x0d0b1f, 0x0d0b1f, 0x0d0b1f, 0.65, 0, 0.65, 0);
@@ -46,17 +48,29 @@ export class MenuScene extends Phaser.Scene {
       { label: () => 'PLAYER VS CPU', hint: 'Pick your fighter, rival & difficulty', action: () => fadeTo(this, 'Select') },
       { label: () => 'ONLINE PLAY', hint: 'Coming in Phase 3', action: () => fadeTo(this, 'Online') },
       { label: () => 'HOW TO PLAY', hint: 'Controls & rules', action: () => this.showHelp() },
-      { label: () => `SOUND: ${sound.muted ? 'OFF' : 'ON'}`, hint: 'Toggle anytime with M', action: () => sound.toggleMute() },
+      { label: () => `AUDIO${sound.muted ? ': MUTED' : ''}`, hint: 'Volume & mute · M mutes anytime', action: () => this.showAudio() },
     ]);
+
+    const offAudio = sound.onSettingsChange(() => this.menu.refresh());
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, offAudio);
 
     this.lineup = this.add.graphics();
     this.figures = new FigureCache(this);
 
     bodyText(this, GAME_WIDTH / 2, GAME_HEIGHT - 16,
-      'Unofficial, noncommercial fan project · Not affiliated with or endorsed by Nintendo · All art & audio procedurally generated',
+      'Unofficial, noncommercial fan project · Not affiliated with or endorsed by Nintendo · All art, music & sound procedurally generated',
       12, 'rgba(255,255,255,0.7)', '500');
 
     this.input.keyboard?.on('keydown-ESC', () => this.closeHelp());
+  }
+
+  private showAudio(): void {
+    if (this.overlay.length) return;
+    this.menu.active = false;
+    openAudioSettings(this, () => {
+      this.menu.active = true;
+      this.menu.refresh();
+    });
   }
 
   private showHelp(): void {
@@ -88,7 +102,7 @@ export class MenuScene extends Phaser.Scene {
       'You (P1) vs the CPU · 3 stocks each · 5 minutes · knock the CPU past the dotted blast lines.',
       'Damage % goes up as you get hit — the higher it is, the farther you fly. CPU: Easy → Expert.',
       'Hold special to charge Luigi\'s rocket or Goku\'s Kamehameha · Spider-Man: special + ↑ in the air web-zips · Gundam has 3 jumps.',
-      'Esc pauses a match · M toggles sound · ` (backtick) shows hitboxes.',
+      'Esc pauses a match · M toggles sound (volumes under AUDIO) · ` (backtick) shows hitboxes.',
     ];
     rules.forEach((line, i) => objs.push(bodyText(this, cx, cy + 140 + i * 26, line, 15, '#e8e5ff', '500')));
     objs.push(displayText(this, cx, cy + 250, 'PRESS ESC OR CLICK TO CLOSE', 16, '#b9b4e6', UI.inkCss, 4));

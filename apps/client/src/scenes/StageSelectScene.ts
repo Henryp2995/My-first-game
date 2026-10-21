@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { music } from '../audio/music';
 import { FIGHTERS, STAGE_ORDER, STAGES, solidExtent, type StageId } from '@arena-rush/shared';
 import { sound } from '../audio/sound';
 import { Backdrop, drawStagePreview } from '../render/backdrop';
@@ -41,6 +42,7 @@ export class StageSelectScene extends Phaser.Scene {
     this.cameras.main.fadeIn(250, 13, 11, 31);
     this.backdrop = new Backdrop(this);
     installGlobalKeys(this);
+    music.play('stageSelect');
     this.add.rectangle(GAME_WIDTH / 2, GAME_HEIGHT / 2, GAME_WIDTH, GAME_HEIGHT, 0x0d0b1f, 0.55);
 
     displayText(this, GAME_WIDTH / 2, 40, 'CHOOSE A STAGE', 38, '#ffd23f', UI.inkCss, 9);

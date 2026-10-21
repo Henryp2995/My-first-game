@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import {
-  createMatch, FIGHTERS, standings, stepMatch,
-  type FighterState, type GameEvent, type MatchState,
+  createMatch, FIGHTERS, getStage, standings, stepMatch,
+  type FighterState, type GameEvent, type MatchState, type StageCamera,
 } from '@arena-rush/shared';
 import { sound } from '../audio/sound';
 import { CpuInputSource } from '../input/cpu';
@@ -11,16 +11,13 @@ import { drawFighter, FIGHTER_UI_COLOR, shade } from '../render/art';
 import { Backdrop, drawStage } from '../render/backdrop';
 import { Effects } from '../render/effects';
 import { FighterView } from '../render/FighterView';
+import { ProjectileView } from '../render/projectiles';
 import { computePose } from '../render/pose';
 import { damageColor, FONT_BODY, GAME_HEIGHT, GAME_WIDTH, UI } from '../theme';
 import { bodyText, displayText, installGlobalKeys, panel } from '../ui/widgets';
 import { isAltCostume, slotColor, slotCss, slotDescription, slotLabel, type MatchSetup, type MatchSummary } from './types';
 
 const STEP_MS = 1000 / 60;
-const CAM_DEFAULT = { x: 0, y: -180 };
-// Camera scroll at the default view; the parallax backdrop is laid out relative to it.
-const SX0 = CAM_DEFAULT.x - GAME_WIDTH / 2;
-const SY0 = CAM_DEFAULT.y - GAME_HEIGHT / 2;
 
 interface HudCard {
   container: Phaser.GameObjects.Container;
@@ -37,6 +34,8 @@ export class BattleScene extends Phaser.Scene {
   private sources: InputSource[] = [];
   private views: FighterView[] = [];
   private effects!: Effects;
+  private projectiles!: ProjectileView;
+  private camBounds!: StageCamera;
   private backdrop!: Backdrop;
   private world!: Phaser.GameObjects.Layer;
   private hud!: Phaser.GameObjects.Layer;
@@ -45,7 +44,7 @@ export class BattleScene extends Phaser.Scene {
   private paused = false;
   private debug = false;
   private endTimer = -1;
-  private cam = { x: CAM_DEFAULT.x, y: CAM_DEFAULT.y, zoom: 1 };
+  private cam = { x: 0, y: -180, zoom: 1 };
   private frameCount = 0;
 
   private timerText!: Phaser.GameObjects.Text;
@@ -69,12 +68,14 @@ export class BattleScene extends Phaser.Scene {
     this.paused = false;
     this.endTimer = -1;
     this.frameCount = 0;
-    this.cam = { x: CAM_DEFAULT.x, y: CAM_DEFAULT.y, zoom: 1 };
     this.cards = [];
     this.offscreenLabels = [];
     this.popups = [];
 
-    this.match = createMatch(this.setup.players, { seed: (Date.now() ^ (Math.random() * 1e9)) >>> 0 });
+    const stage = getStage(this.setup.stage);
+    this.camBounds = stage.camera;
+    this.cam = { x: stage.camera.centerX, y: stage.camera.centerY, zoom: 1 };
+    this.match = createMatch(this.setup.players, { seed: (Date.now() ^ (Math.random() * 1e9)) >>> 0, stage });
     // Every fighter is driven by an InputSource: the keyboard for the human, the CPU brain for the computer.
     this.sources = this.setup.players.map((slot, i): InputSource =>
       slot.control === 'cpu'
@@ -84,18 +85,23 @@ export class BattleScene extends Phaser.Scene {
     this.world = this.add.layer();
     this.hud = this.add.layer();
 
-    this.backdrop = new Backdrop(this, SX0, SY0);
+    // The parallax backdrop is laid out relative to the camera scroll at the stage's default view.
+    const sx0 = stage.camera.centerX - GAME_WIDTH / 2;
+    const sy0 = stage.camera.centerY - GAME_HEIGHT / 2;
+    this.backdrop = new Backdrop(this, sx0, sy0, stage.theme);
     this.world.add(this.backdrop.objects);
     this.world.add(drawStage(this, this.match.stage));
     this.views = this.match.fighters.map((f) => new FighterView(
       this, f.id, slotLabel(this.setup, f.id), slotColor(this.setup, f.id), slotCss(this.setup, f.id), isAltCostume(this.setup, f.id),
     ));
     for (const v of this.views) this.world.add(v.objects);
+    this.projectiles = new ProjectileView(this);
+    this.world.add(this.projectiles.g);
     this.effects = new Effects(this);
     this.world.add(this.effects.g);
 
     const main = this.cameras.main;
-    main.centerOn(CAM_DEFAULT.x, CAM_DEFAULT.y);
+    main.centerOn(stage.camera.centerX, stage.camera.centerY);
     this.hudCam = this.cameras.add(0, 0, GAME_WIDTH, GAME_HEIGHT);
     main.ignore(this.hud);
     this.hudCam.ignore(this.world);
@@ -312,6 +318,7 @@ export class BattleScene extends Phaser.Scene {
       }
     }
     for (let i = 0; i < this.views.length; i++) this.views[i].draw(this.match.fighters[i], this.debug);
+    this.projectiles.draw(this.match.projectiles, this.frameCount);
     this.effects.draw();
     this.updateCamera();
     this.updateHud();
@@ -393,9 +400,30 @@ export class BattleScene extends Phaser.Scene {
       case 'attack':
         if (e.slot === 'heavy') sound.heavy();
         else if (e.slot === 'special') {
-          if (fighters[e.id].fighter === 'gnw') sound.special('judge');
+          const who = fighters[e.id].fighter;
+          if (who === 'gnw') sound.special('judge');
+          else if (who === 'goku') sound.beamCharge();
+          else if (who === 'naruto') sound.rasengan();
         } else sound.light();
         break;
+      case 'projectile':
+        if (e.kind === 'web') sound.web();
+        else if (e.kind === 'batarang') sound.batarang();
+        else {
+          sound.beamFire(e.charge);
+          this.cameras.main.shake(160 + e.charge * 200, 0.003 + e.charge * 0.004);
+          this.effects.burst(e.x, e.y, 0x6fd8ff);
+        }
+        break;
+      case 'projectileEnd':
+        if (!e.hit && e.kind !== 'batarang') this.effects.smoke(e.x, e.y, 4);
+        break;
+      case 'webzip': {
+        sound.webzip();
+        const f = fighters[e.id];
+        this.effects.webLine(f.x, f.y - 60, e.anchorX, e.anchorY);
+        break;
+      }
       case 'judge': {
         sound.judgeNumber(e.value);
         const f = fighters[e.id];
@@ -453,8 +481,9 @@ export class BattleScene extends Phaser.Scene {
   private updateCamera(): void {
     const main = this.cameras.main;
     const alive = this.match.fighters.filter((f) => f.action !== 'dead' && !f.eliminated);
-    let tx = CAM_DEFAULT.x;
-    let ty = CAM_DEFAULT.y;
+    const cb = this.camBounds;
+    let tx = cb.centerX;
+    let ty = cb.centerY;
     let tz = 1;
     if (alive.length > 0 && this.match.phase !== 'countdown') {
       let minX = Infinity;
@@ -467,15 +496,15 @@ export class BattleScene extends Phaser.Scene {
         minY = Math.min(minY, f.y - 80);
         maxY = Math.max(maxY, f.y);
       }
-      // Always keep the main platform loosely framed.
-      minX = Math.min(minX, -300);
-      maxX = Math.max(maxX, 300);
+      // Always keep the middle of the stage loosely framed.
+      minX = Math.min(minX, cb.centerX - 300);
+      maxX = Math.max(maxX, cb.centerX + 300);
       maxY = Math.max(maxY, 40);
       const spanX = maxX - minX + 420;
       const spanY = maxY - minY + 360;
-      tz = Phaser.Math.Clamp(Math.min(GAME_WIDTH / spanX, GAME_HEIGHT / spanY), 0.55, 1.05);
-      tx = Phaser.Math.Clamp((minX + maxX) / 2, -620, 620);
-      ty = Phaser.Math.Clamp((minY + maxY) / 2 + 40, -560, 60);
+      tz = Phaser.Math.Clamp(Math.min(GAME_WIDTH / spanX, GAME_HEIGHT / spanY), cb.minZoom, cb.maxZoom);
+      tx = Phaser.Math.Clamp((minX + maxX) / 2, cb.minX, cb.maxX);
+      ty = Phaser.Math.Clamp((minY + maxY) / 2 + 40, cb.minY, cb.maxY);
     }
     const k = 0.08;
     this.cam.x += (tx - this.cam.x) * k;

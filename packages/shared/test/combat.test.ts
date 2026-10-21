@@ -14,11 +14,13 @@ function face(m: ReturnType<typeof setupMatch>, gap = 40) {
 }
 
 describe('character stats', () => {
-  it('defines all three fighters with all four move slots', () => {
-    expect(FIGHTER_ORDER).toEqual(['gnw', 'luigi', 'sheik']);
+  it('defines all seven fighters with all four move slots', () => {
+    expect(FIGHTER_ORDER).toEqual(['gnw', 'luigi', 'sheik', 'spiderman', 'batman', 'naruto', 'goku']);
     for (const id of FIGHTER_ORDER) {
       for (const slot of ['light', 'heavy', 'special', 'aerial'] as MoveSlot[]) {
-        expect(FIGHTERS[id].moves[slot].hitboxes.length).toBeGreaterThan(0);
+        const move = FIGHTERS[id].moves[slot];
+        // Every move hits with a body hitbox or fires a projectile.
+        expect(move.hitboxes.length > 0 || move.behavior?.type === 'projectile', `${id} ${slot}`).toBe(true);
       }
     }
   });

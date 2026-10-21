@@ -4,7 +4,7 @@ import { rectsOverlap, type Rect } from './geometry';
 import { emptyInput, type InputFrame } from './input';
 import type { FighterAction, FighterState, MatchState } from './match';
 import { nextRandom } from './rng';
-import type { Platform } from './stage';
+import { solidExtent, solidSurfaceAt, type StageDef } from './stage';
 
 export type CpuDifficulty = 'easy' | 'normal' | 'hard' | 'expert';
 export const CPU_DIFFICULTIES: CpuDifficulty[] = ['easy', 'normal', 'hard', 'expert'];
@@ -158,7 +158,7 @@ export class CpuController {
 
   private think(m: MatchState, me: FighterState, foe: Snapshot | null): InputFrame {
     const out = emptyInput();
-    const stage = mainPlatform(m);
+    const stage = stageGeo(m.stage);
 
     if (me.action === 'respawning') {
       if (this.respawnWait < 0) this.respawnWait = 15 + Math.floor(nextRandom(this.rng) * 45);
@@ -188,7 +188,7 @@ export class CpuController {
       this.recover(m, me, stage, out);
     } else {
       this.recovering = false;
-      if (foe) this.neutral(m, me, foe, stage, out);
+      if (foe && !this.dodgeProjectile(m, me)) this.neutral(m, me, foe, stage, out);
     }
     this.flushPress(out);
     return out;
@@ -198,22 +198,25 @@ export class CpuController {
   // Recovery
   // ---------------------------------------------------------------------------
 
-  private isOffstage(me: FighterState, p: Platform): boolean {
+  private isOffstage(me: FighterState, g: StageGeo): boolean {
     if (me.grounded) return false;
-    return me.x < p.x1 - 8 || me.x > p.x2 + 8 || me.y > p.y + 4;
+    if (me.x < g.x1 - 8 || me.x > g.x2 + 8) return true;
+    const top = g.topAt(me.x);
+    return top !== null && me.y > top + 4; // below the deck: under the stage
   }
 
-  private recover(m: MatchState, me: FighterState, p: Platform, out: InputFrame): void {
+  private recover(m: MatchState, me: FighterState, g: StageGeo, out: InputFrame): void {
     const canAirDodge = canDodge(m, me);
     if (!this.recovering) {
       this.recovering = true;
       this.goodRecovery = this.chance(this.profile.recoverySkill);
     }
     const def = FIGHTERS[me.fighter];
-    const side = me.x < (p.x1 + p.x2) / 2 ? -1 : 1;
-    const edgeX = side < 0 ? p.x1 : p.x2;
+    const side = me.x < g.centerX ? -1 : 1;
+    const edgeX = side < 0 ? g.x1 : g.x2;
     const outside = (me.x - edgeX) * side; // > 0 when past the ledge
-    const below = me.y - p.y; // > 0 when below the stage top
+    // Height relative to the ledge we're heading for (or the deck we're under).
+    const below = me.y - (outside > 0 ? g.edgeTop(side) : g.topAt(me.x) ?? g.edgeTop(side)); // > 0 when below
     const toward = outside > -12 ? -side : side; // under the stage: get out from underneath first
     const underStage = outside < 0 && below > 0;
     // Vanish reads its direction when it fires (end of startup), so keep aiming until then:
@@ -224,6 +227,12 @@ export class CpuController {
     if (move?.behavior?.type === 'vanish' && me.actionFrame < move.startup) {
       setDir(out, vanishDir);
       out.up = vanishUp;
+      return;
+    }
+    // Web-zip also reads "up" when it fires.
+    if (move?.behavior?.type === 'projectile' && move.behavior.airUpZip && me.actionFrame < move.startup) {
+      setDir(out, toward);
+      out.up = true;
       return;
     }
     if (!this.holding) setDir(out, toward);
@@ -254,6 +263,8 @@ export class CpuController {
       } else if (canAirDodge) {
         this.press({ button: 'dodge', dir: toward, up: true });
       }
+    } else if (def.moves.special.behavior?.type === 'projectile' && def.moves.special.behavior.airUpZip && !used('special') && !underStage) {
+      this.press({ button: 'special', dir: toward, up: true }); // Spider-Man web-zip
     } else if (canAirDodge) {
       this.press({ button: 'dodge', dir: toward, up: true });
     }
@@ -263,7 +274,7 @@ export class CpuController {
   // Neutral game
   // ---------------------------------------------------------------------------
 
-  private neutral(m: MatchState, me: FighterState, foe: Snapshot, stage: Platform, out: InputFrame): void {
+  private neutral(m: MatchState, me: FighterState, foe: Snapshot, stage: StageGeo, out: InputFrame): void {
     const prof = this.profile;
     const dx = foe.x - me.x;
     const dy = foe.y - me.y; // negative: opponent is above
@@ -308,7 +319,7 @@ export class CpuController {
         else this.moveDir = 0;
       }
 
-      if (actionable && this.chooseAttack(me, foe, dirTo, stage, adx, dy)) return;
+      if (actionable && this.chooseAttack(m, me, foe, dirTo, stage, adx, dy)) return;
 
       // Chase vertically.
       if (me.grounded && dy < -110 && adx < 220 && this.chance(0.6)) {
@@ -327,7 +338,7 @@ export class CpuController {
     }
   }
 
-  private chooseAttack(me: FighterState, foe: Snapshot, dir: 1 | -1, stage: Platform, adx: number, dy: number): boolean {
+  private chooseAttack(m: MatchState, me: FighterState, foe: Snapshot, dir: 1 | -1, stage: StageGeo, adx: number, dy: number): boolean {
     const prof = this.profile;
     if (!this.chance(prof.attackRate)) return false;
     const def = FIGHTERS[me.fighter];
@@ -335,6 +346,22 @@ export class CpuController {
     const ready = (slot: MoveSlot) => me.cooldowns[slot] <= 0 && !(!me.grounded && def.moves[slot].oncePerAirtime && me.airUsed.includes(slot));
 
     // Long-range specials.
+    const special = def.moves.special;
+    if (me.grounded && Math.abs(dy) < 50 && ready('special') && special.behavior?.type === 'projectile') {
+      const kind = special.behavior.kind;
+      const ownShotOut = m.projectiles.some((p) => p.owner === me.id && p.kind === kind);
+      const inBand = kind === 'web' ? adx > 110 && adx < 480 : kind === 'batarang' ? adx > 140 && adx < 520 : adx > 180 && adx < 900;
+      const odds = kind === 'beam' ? 0.18 : 0.28;
+      if (!ownShotOut && inBand && Math.abs(dy) < 40 && foe.action !== 'hitstun' && this.chance(odds)) {
+        // Kamehameha: smarter CPUs charge longer from farther away.
+        const chargeMax = special.charge?.maxFrames ?? 0;
+        const charge = chargeMax === 0 ? 0 : prof.smart
+          ? Math.min(chargeMax, Math.round((adx - 150) / 12))
+          : Math.floor(nextRandom(this.rng) * chargeMax * 0.5);
+        this.press({ button: 'special', dir, hold: chargeMax ? special.startup + charge : undefined });
+        return true;
+      }
+    }
     if (me.grounded && Math.abs(dy) < 50 && ready('special')) {
       if (me.fighter === 'luigi' && adx > 220 && adx < 620 && this.chance(0.25)) {
         const charge = prof.smart ? Math.min(55, Math.round((adx - 200) / 7)) : Math.floor(nextRandom(this.rng) * 40);
@@ -350,14 +377,19 @@ export class CpuController {
     }
 
     const candidates: MoveSlot[] = me.grounded ? ['light', 'heavy', 'special'] : ['aerial', 'heavy'];
-    if (me.fighter === 'gnw' && !me.grounded) candidates.push('special');
+    // Close-range specials (Judge, Rasengan) are picked like normal attacks; movement/projectile
+    // specials (rocket, vanish, web, batarang, beam) are handled above.
+    const meleeSpecial = !special.behavior || special.behavior.type === 'judge';
+    if (meleeSpecial && !me.grounded) candidates.push('special');
     const quick: MoveSlot = me.grounded ? 'light' : 'aerial';
     const chainCapped = this.foeFree < BREATHER_FRAMES && this.jabChain >= prof.maxJabChain;
     const hits = candidates.filter((slot) => {
       if (!ready(slot)) return false;
       if (slot === quick && chainCapped) return false;
-      if (slot === 'special' && me.fighter !== 'gnw') return false;
-      if (slot === 'aerial' && !overStage) return false; // Key Drop & co. are suicide offstage
+      if (slot === 'special' && !meleeSpecial) return false;
+      // Key Drop, dive kicks and dashing specials (Rasengan) can carry a fighter offstage.
+      if ((slot === 'aerial' || (slot === 'special' && !me.grounded)) && !overStage) return false;
+      if (slot === 'special' && special.impulse?.vx && !this.safeToMove({ ...me, grounded: true }, stage, dir)) return false;
       return wouldHit(me, slot, foe, dir);
     });
     if (!hits.length) {
@@ -388,14 +420,42 @@ export class CpuController {
       }
     }
     if (slot === quick) this.jabChain++;
-    this.press({ button: slot === 'aerial' ? 'light' : slot, dir });
+    // Chargeable heavies (Goku): smart CPUs charge a little into a stunned or slow opponent.
+    const move = def.moves[slot];
+    const hold = move.charge
+      ? move.startup + (prof.smart && foe.action === 'hitstun' ? Math.min(move.charge.maxFrames, 12) : 0)
+      : undefined;
+    this.press({ button: slot === 'aerial' ? 'light' : slot, dir, hold });
     return true;
   }
 
-  private safeToMove(me: FighterState, p: Platform, dir: number): boolean {
+  private safeToMove(me: FighterState, g: StageGeo, dir: number): boolean {
     if (!me.grounded || dir === 0) return true;
     const margin = 30;
-    return !((dir < 0 && me.x < p.x1 + margin) || (dir > 0 && me.x > p.x2 - margin));
+    return !((dir < 0 && me.x < g.x1 + margin) || (dir > 0 && me.x > g.x2 - margin));
+  }
+
+  /** Dodge or hop over an enemy projectile that is about to hit. Returns true if it reacted. */
+  private dodgeProjectile(m: MatchState, me: FighterState): boolean {
+    const actionable = me.action === 'idle' || me.action === 'run' || me.action === 'air';
+    if (!actionable || !m.projectiles.length) return false;
+    for (const p of m.projectiles) {
+      if (p.owner === me.id) continue;
+      const key = `proj:${p.id}`;
+      if (key === this.dodgedKey) continue;
+      const dx = me.x - p.x;
+      const approaching = p.vx !== 0 && Math.sign(p.vx) === Math.sign(dx);
+      const sameHeight = Math.abs(me.y - 40 - p.y) < 60;
+      // React when the projectile is ~12-20 frames away; reaction time eats into that window.
+      const framesAway = Math.abs(dx) / (Math.abs(p.vx) / 60 || 1);
+      if (!approaching || !sameHeight || framesAway > 20 || framesAway < 2) continue;
+      this.dodgedKey = key;
+      if (!this.chance(this.profile.dodgeRate)) return false;
+      if (canDodge(m, me)) this.press({ button: 'dodge', dir: 0 });
+      else if (me.grounded) this.press({ button: 'jump', dir: 0, hold: 10 }); // hop over it
+      return true;
+    }
+    return false;
   }
 
   // ---------------------------------------------------------------------------
@@ -441,10 +501,33 @@ function snapshot(f: FighterState): Snapshot {
   };
 }
 
-function mainPlatform(m: MatchState): Platform {
-  let best = m.stage.platforms[0];
-  for (const p of m.stage.platforms) if (!p.oneWay && p.x2 - p.x1 > best.x2 - best.x1) best = p;
-  return best;
+/** The CPU's view of a stage's solid ground — works for any layout (flat, stepped, multi-platform). */
+interface StageGeo {
+  x1: number;
+  x2: number;
+  centerX: number;
+  /** Top of solid ground at x, or null over a gap. */
+  topAt(x: number): number | null;
+  /** Top of the ledge on the given side (-1 left, 1 right). */
+  edgeTop(side: number): number;
+}
+
+const geoCache = new WeakMap<StageDef, StageGeo>();
+
+function stageGeo(stage: StageDef): StageGeo {
+  let g = geoCache.get(stage);
+  if (!g) {
+    const { x1, x2 } = solidExtent(stage);
+    const leftTop = solidSurfaceAt(stage, x1 + 1) ?? 0;
+    const rightTop = solidSurfaceAt(stage, x2 - 1) ?? 0;
+    g = {
+      x1, x2, centerX: (x1 + x2) / 2,
+      topAt: (x) => solidSurfaceAt(stage, x),
+      edgeTop: (side) => (side < 0 ? leftTop : rightTop),
+    };
+    geoCache.set(stage, g);
+  }
+  return g;
 }
 
 function onOneWay(m: MatchState, me: FighterState): boolean {

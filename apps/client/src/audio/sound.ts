@@ -126,6 +126,30 @@ class SoundManager {
       this.tone(500, 1000, 0.15, 'triangle', 0.1);
     }
   }
+  web(): void {
+    this.noise(0.09, 0.25, 'highpass', 7000, 2500);
+    this.tone(1800, 900, 0.06, 'triangle', 0.05);
+  }
+  webzip(): void {
+    this.noise(0.14, 0.2, 'bandpass', 5000, 1500);
+    this.tone(600, 1400, 0.15, 'triangle', 0.06);
+  }
+  batarang(): void {
+    this.noise(0.4, 0.14, 'bandpass', 900, 2600);
+    this.tone(500, 380, 0.35, 'sawtooth', 0.03);
+  }
+  beamCharge(): void {
+    this.tone(120, 520, 0.9, 'sawtooth', 0.05);
+    this.tone(240, 1040, 0.9, 'sine', 0.05);
+  }
+  beamFire(charge: number): void {
+    this.noise(0.7 + charge * 0.4, 0.35, 'lowpass', 4000, 300);
+    this.tone(520, 140, 0.7 + charge * 0.3, 'sawtooth', 0.1 + charge * 0.06);
+  }
+  rasengan(): void {
+    this.tone(300, 900, 0.3, 'sawtooth', 0.05);
+    this.noise(0.4, 0.14, 'bandpass', 1200, 4000);
+  }
   judgeNumber(n: number): void {
     for (let i = 0; i < Math.min(n, 9); i++) this.tone(880 + n * 40, 880 + n * 40, 0.035, 'square', 0.05, i * 0.045);
   }

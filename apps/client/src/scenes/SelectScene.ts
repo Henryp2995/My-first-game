@@ -1,5 +1,8 @@
 import Phaser from 'phaser';
-import { CPU_DIFFICULTIES, CPU_PROFILES, FIGHTERS, FIGHTER_ORDER, type CpuDifficulty, type FighterId } from '@arena-rush/shared';
+import {
+  CPU_DIFFICULTIES, CPU_PROFILES, FIGHTERS, FIGHTER_ORDER, weightRating,
+  type CpuDifficulty, type FighterId,
+} from '@arena-rush/shared';
 import { sound } from '../audio/sound';
 import { drawFighter, FIGHTER_UI_COLOR, shade } from '../render/art';
 import { Backdrop } from '../render/backdrop';
@@ -8,15 +11,14 @@ import { CPU_COLOR, CPU_CSS, FONT_BODY, GAME_HEIGHT, GAME_WIDTH, PLAYER_COLORS, 
 import { bodyText, displayText, fadeTo, installGlobalKeys, panel } from '../ui/widgets';
 import type { MatchSetup } from './types';
 
-/** Player vs CPU setup flow: pick your fighter → pick the CPU's fighter → pick CPU difficulty. */
-type Step = 'player' | 'cpu' | 'difficulty' | 'ready';
-const STEPS: Step[] = ['player', 'cpu', 'difficulty', 'ready'];
+/** Player vs CPU setup flow: pick your fighter → pick the CPU's fighter → pick CPU difficulty → stage select. */
+type Step = 'player' | 'cpu' | 'difficulty';
+const STEPS: Step[] = ['player', 'cpu', 'difficulty'];
 
 const STEP_TITLE: Record<Step, string> = {
   player: 'CHOOSE YOUR FIGHTER',
   cpu: 'CHOOSE YOUR OPPONENT',
   difficulty: 'CPU DIFFICULTY',
-  ready: 'READY!',
 };
 
 const DIFFICULTY_BLURB: Record<CpuDifficulty, string> = {
@@ -26,13 +28,21 @@ const DIFFICULTY_BLURB: Record<CpuDifficulty, string> = {
   expert: 'Near-instant reactions. Good luck!',
 };
 
-const CARD_W = 340;
-const CARD_H = 420;
-const CARD_Y = 330;
-const cardX = (i: number) => GAME_WIDTH / 2 + (i - 1) * 380;
-const PANEL_Y = 630;
-const CPU_PANEL_X = GAME_WIDTH - 300;
-const pillX = (k: number) => CPU_PANEL_X + 40 + (k - 1.5) * 96;
+// Roster strip
+const N = FIGHTER_ORDER.length;
+const CARD_W = 160;
+const CARD_H = 200;
+const CARD_GAP = 12;
+const ROSTER_Y = 218;
+const cardX = (i: number) => GAME_WIDTH / 2 + (i - (N - 1) / 2) * (CARD_W + CARD_GAP);
+
+// Detail panels
+const PANEL_W = 600;
+const PANEL_H = 286;
+const PANEL_Y = 512;
+const PANEL_X = [GAME_WIDTH / 2 - 312, GAME_WIDTH / 2 + 312];
+const pillX = (k: number) => PANEL_X[1] + 60 + (k - 1.5) * 92;
+const PILL_Y = PANEL_Y + 104;
 
 const KEYS = {
   left: ['KeyA', 'ArrowLeft'],
@@ -40,6 +50,15 @@ const KEYS = {
   confirm: ['KeyF', 'Enter', 'Space'],
   back: ['KeyG', 'Backspace'],
 };
+
+interface DetailPanel {
+  preview: Phaser.GameObjects.Graphics;
+  name: Phaser.GameObjects.Text;
+  tagline: Phaser.GameObjects.Text;
+  bars: Phaser.GameObjects.Graphics;
+  moves: Phaser.GameObjects.Text;
+  status: Phaser.GameObjects.Text;
+}
 
 export class SelectScene extends Phaser.Scene {
   private backdrop!: Backdrop;
@@ -55,9 +74,8 @@ export class SelectScene extends Phaser.Scene {
   private badges: Phaser.GameObjects.Text[] = [];
   private title!: Phaser.GameObjects.Text;
   private subtitle!: Phaser.GameObjects.Text;
-  private panels!: { p1Name: Phaser.GameObjects.Text; p1Status: Phaser.GameObjects.Text; cpuName: Phaser.GameObjects.Text; cpuStatus: Phaser.GameObjects.Text };
-  private banner!: Phaser.GameObjects.Container;
-  private startTimer = -1;
+  private details: DetailPanel[] = [];
+  private leaving = false;
   private t = 0;
   private previous: MatchSetup | null = null;
 
@@ -71,129 +89,131 @@ export class SelectScene extends Phaser.Scene {
 
   create(): void {
     this.t = 0;
-    this.startTimer = -1;
     this.step = 'player';
+    this.leaving = false;
     this.previews = [];
     this.badges = [];
     this.pillText = [];
+    this.details = [];
     this.confirmedAt = [-999, -999];
     this.cameras.main.fadeIn(250, 13, 11, 31);
     this.backdrop = new Backdrop(this);
     installGlobalKeys(this);
-    this.add.rectangle(GAME_WIDTH / 2, GAME_HEIGHT / 2, GAME_WIDTH, GAME_HEIGHT, 0x0d0b1f, 0.45);
+    this.add.rectangle(GAME_WIDTH / 2, GAME_HEIGHT / 2, GAME_WIDTH, GAME_HEIGHT, 0x0d0b1f, 0.5);
 
-    // Restore the last match's picks (when coming back from Results).
+    // Restore the last match's picks (when coming back from Results or stage select).
     const prevHuman = this.previous?.players.find((p) => p.control === 'human');
     const prevCpu = this.previous?.players.find((p) => p.control === 'cpu');
-    this.playerIndex = prevHuman ? FIGHTER_ORDER.indexOf(prevHuman.fighter) : 0;
-    this.cpuIndex = prevCpu ? FIGHTER_ORDER.indexOf(prevCpu.fighter) : 2;
+    this.playerIndex = prevHuman ? Math.max(0, FIGHTER_ORDER.indexOf(prevHuman.fighter)) : 0;
+    this.cpuIndex = prevCpu ? Math.max(0, FIGHTER_ORDER.indexOf(prevCpu.fighter)) : 2;
     this.difficulty = prevCpu?.control === 'cpu' ? CPU_DIFFICULTIES.indexOf(prevCpu.difficulty) : 1;
 
-    this.title = displayText(this, GAME_WIDTH / 2, 40, '', 38, '#ffd23f', UI.inkCss, 10);
-    this.subtitle = bodyText(this, GAME_WIDTH / 2, 82, '', 15, '#ffffff', '700');
+    this.title = displayText(this, GAME_WIDTH / 2, 36, '', 36, '#ffd23f', UI.inkCss, 9);
+    this.subtitle = bodyText(this, GAME_WIDTH / 2, 76, '', 15, '#ffffff', '700');
 
     FIGHTER_ORDER.forEach((id, i) => this.buildCard(id, i));
     this.cursorGfx = this.add.graphics();
-    this.badges.push(displayText(this, 0, 0, 'P1', 22, '#ffffff', shadeCss(PLAYER_COLORS[0]), 0));
-    this.badges.push(displayText(this, 0, 0, 'CPU', 20, '#ffffff', shadeCss(CPU_COLOR), 0));
+    this.badges.push(displayText(this, 0, 0, 'P1', 18, '#ffffff', shadeCss(PLAYER_COLORS[0]), 0));
+    this.badges.push(displayText(this, 0, 0, 'CPU', 16, '#ffffff', shadeCss(CPU_COLOR), 0));
 
-    // P1 panel
-    panel(this, 300, PANEL_Y, 520, 110, UI.panel, PLAYER_COLORS[0], 0.95, 16);
-    displayText(this, 90, PANEL_Y - 14, 'P1', 34, PLAYER_CSS[0], UI.inkCss, 6);
-    bodyText(this, 90, PANEL_Y + 22, 'YOU', 13, PLAYER_CSS[0], '900');
-    const p1Name = displayText(this, 320, PANEL_Y - 22, '', 22, '#ffffff', UI.inkCss, 5);
-    const p1Status = bodyText(this, 320, PANEL_Y + 8, '', 15, UI.muted, '700');
-    bodyText(this, 320, PANEL_Y + 36, 'A / D  choose   ·   F  confirm   ·   G  back', 13, '#8a84bf', '500');
+    this.buildDetailPanel(0);
+    this.buildDetailPanel(1);
 
-    // CPU panel with difficulty pills
-    panel(this, CPU_PANEL_X, PANEL_Y, 520, 110, UI.panel, CPU_COLOR, 0.95, 16);
-    displayText(this, CPU_PANEL_X - 210, PANEL_Y - 14, 'CPU', 30, CPU_CSS, UI.inkCss, 6);
-    bodyText(this, CPU_PANEL_X - 210, PANEL_Y + 22, 'COMPUTER', 11, CPU_CSS, '900');
-    const cpuName = displayText(this, CPU_PANEL_X + 40, PANEL_Y - 32, '', 20, '#ffffff', UI.inkCss, 5);
+    // Difficulty pills (in the CPU panel)
     this.pillGfx = this.add.graphics();
     CPU_DIFFICULTIES.forEach((d, k) => {
-      this.pillText.push(bodyText(this, pillX(k), PANEL_Y + 2, CPU_PROFILES[d].label.toUpperCase(), 13, '#ffffff', '900'));
-      const zone = this.add.zone(pillX(k), PANEL_Y + 2, 88, 28).setInteractive({ useHandCursor: true });
+      this.pillText.push(bodyText(this, pillX(k), PILL_Y, CPU_PROFILES[d].label.toUpperCase(), 12, '#ffffff', '900'));
+      const zone = this.add.zone(pillX(k), PILL_Y, 84, 26).setInteractive({ useHandCursor: true });
       zone.on('pointerdown', () => {
-        if (this.step === 'player' || this.step === 'ready') return;
+        if (this.step === 'player') return;
         this.difficulty = k;
         this.step = 'difficulty';
         this.advance();
       });
     });
-    const cpuStatus = bodyText(this, CPU_PANEL_X + 40, PANEL_Y + 34, '', 13, UI.muted, '700');
-    this.panels = { p1Name, p1Status, cpuName, cpuStatus };
 
-    // Ready banner
-    const bg = this.add.graphics();
-    bg.fillStyle(0x000000, 0.4);
-    bg.fillRect(-GAME_WIDTH / 2, -46, GAME_WIDTH, 100);
-    bg.fillStyle(UI.accent, 1);
-    bg.fillRect(-GAME_WIDTH / 2, -40, GAME_WIDTH, 80);
-    const txt = displayText(this, 0, -2, 'READY TO FIGHT!', 44, UI.inkCss, '#ffffff', 0);
-    const sub = this.add.text(0, 30, 'F  start now   ·   G  change picks', { fontFamily: FONT_BODY, fontSize: '14px', fontStyle: '700', color: '#3b3470' }).setOrigin(0.5);
-    this.banner = this.add.container(GAME_WIDTH / 2, 330, [bg, txt, sub]).setVisible(false).setDepth(10);
-
-    bodyText(this, GAME_WIDTH / 2, 702, 'Esc: back to menu   ·   M: mute   ·   mouse works too', 13, 'rgba(255,255,255,0.6)', '500');
+    bodyText(this, GAME_WIDTH / 2, 702,
+      'A / D  choose   ·   F  confirm   ·   G  back   ·   Esc  menu   ·   M  mute   ·   mouse works too',
+      13, 'rgba(255,255,255,0.65)', '500');
 
     this.input.keyboard?.on('keydown', (e: KeyboardEvent) => this.onKey(e.code));
     this.refresh();
   }
 
   private buildCard(id: FighterId, i: number): void {
-    const def = FIGHTERS[id];
     const x = cardX(i);
+    const top = ROSTER_Y - CARD_H / 2;
     const color = FIGHTER_UI_COLOR[id];
     const g = this.add.graphics();
     g.fillStyle(0x000000, 0.3);
-    g.fillRoundedRect(x - CARD_W / 2 + 8, CARD_Y - CARD_H / 2 + 10, CARD_W, CARD_H, 20);
-    g.fillStyle(UI.panel, 0.96);
-    g.fillRoundedRect(x - CARD_W / 2, CARD_Y - CARD_H / 2, CARD_W, CARD_H, 20);
-    // Portrait area
-    g.fillStyle(id === 'gnw' ? 0xc9d4a6 : shade(color, 0.55), 1);
-    g.fillRoundedRect(x - CARD_W / 2 + 12, CARD_Y - CARD_H / 2 + 12, CARD_W - 24, 180, 14);
+    g.fillRoundedRect(x - CARD_W / 2 + 5, top + 6, CARD_W, CARD_H, 14);
+    g.fillStyle(UI.panel, 0.97);
+    g.fillRoundedRect(x - CARD_W / 2, top, CARD_W, CARD_H, 14);
+    g.fillStyle(id === 'gnw' ? 0xc9d4a6 : shade(color, 0.5), 1);
+    g.fillRoundedRect(x - CARD_W / 2 + 7, top + 7, CARD_W - 14, 150, 10);
     if (id === 'gnw') {
-      // LCD-style screen with faint segment grid
       g.lineStyle(1, 0xb4bf90, 1);
-      for (let gx = x - CARD_W / 2 + 20; gx < x + CARD_W / 2 - 12; gx += 8) {
-        g.lineBetween(gx, CARD_Y - CARD_H / 2 + 14, gx, CARD_Y - CARD_H / 2 + 190);
-      }
+      for (let gx = x - CARD_W / 2 + 12; gx < x + CARD_W / 2 - 8; gx += 7) g.lineBetween(gx, top + 9, gx, top + 155);
     } else {
       g.fillStyle(color, 0.35);
-      g.fillCircle(x, CARD_Y - CARD_H / 2 + 104, 74);
+      g.fillCircle(x, top + 80, 56);
     }
     g.fillStyle(0x000000, 0.18);
-    g.fillEllipse(x, CARD_Y - CARD_H / 2 + 180, 140, 16);
+    g.fillEllipse(x, top + 146, 90, 10);
 
-    const name = def.name.toUpperCase();
-    displayText(this, x, CARD_Y + 10, name, name.length > 10 ? 22 : 28, '#ffffff', UI.inkCss, 6);
-    bodyText(this, x, CARD_Y + 38, def.tagline, 14, UI.muted, '500');
+    const name = displayText(this, x, top + 178, FIGHTERS[id].name.toUpperCase(), 17, '#ffffff', UI.inkCss, 5);
+    while (name.width > CARD_W - 14 && Number.parseInt(String(name.style.fontSize), 10) > 9) {
+      name.setFontSize(Number.parseInt(String(name.style.fontSize), 10) - 1);
+    }
 
-    const stats: [string, number][] = [['SPEED', def.ratings.speed], ['POWER', def.ratings.power], ['JUMP', def.ratings.jump]];
-    stats.forEach(([label, v], k) => {
-      const y = CARD_Y + 74 + k * 28;
-      this.add.text(x - 140, y, label, { fontFamily: FONT_BODY, fontSize: '15px', fontStyle: '900', color: '#ffffff' }).setOrigin(0, 0.5);
-      for (let pip = 0; pip < 5; pip++) {
-        g.fillStyle(pip < v ? UI.accent : 0x3a3473, 1);
-        g.fillRoundedRect(x - 30 + pip * 34, y - 8, 28, 16, 4);
-      }
-    });
-    bodyText(this, x, CARD_Y + 164, `Weight: ${def.ratings.weight}   ·   Difficulty: ${def.ratings.difficulty}`, 14, '#e8e5ff', '700');
-    bodyText(this, x, CARD_Y + 188, `${def.moves.special.name} · ${def.moves.heavy.name}`, 13, '#8a84bf', '500');
+    this.previews.push(this.add.graphics());
 
-    const preview = this.add.graphics();
-    this.previews.push(preview);
-
-    const zone = this.add.zone(x, CARD_Y, CARD_W, CARD_H).setInteractive({ useHandCursor: true });
+    const zone = this.add.zone(x, ROSTER_Y, CARD_W, CARD_H).setInteractive({ useHandCursor: true });
     zone.on('pointerdown', () => {
       if (this.step === 'player') this.playerIndex = i;
       else if (this.step === 'cpu') this.cpuIndex = i;
       else return;
       this.advance();
     });
+    zone.on('pointerover', () => {
+      if (this.step === 'player' && this.playerIndex !== i) {
+        this.playerIndex = i;
+        sound.menuMove();
+        this.refresh();
+      } else if (this.step === 'cpu' && this.cpuIndex !== i) {
+        this.cpuIndex = i;
+        sound.menuMove();
+        this.refresh();
+      }
+    });
+  }
+
+  private buildDetailPanel(who: 0 | 1): void {
+    const cx = PANEL_X[who];
+    const color = who === 0 ? PLAYER_COLORS[0] : CPU_COLOR;
+    panel(this, cx, PANEL_Y, PANEL_W, PANEL_H, UI.panel, color, 0.96, 18);
+    const left = cx - PANEL_W / 2;
+    const g = this.add.graphics();
+    g.fillStyle(shade(color, 0.35), 1);
+    g.fillRoundedRect(left + 14, PANEL_Y - PANEL_H / 2 + 14, 170, PANEL_H - 28, 12);
+    displayText(this, left + 46, PANEL_Y - PANEL_H / 2 + 34, who === 0 ? 'P1' : 'CPU', who === 0 ? 24 : 20,
+      who === 0 ? PLAYER_CSS[0] : CPU_CSS, UI.inkCss, 5);
+    bodyText(this, left + 140, PANEL_Y - PANEL_H / 2 + 34, who === 0 ? 'YOU' : 'COMPUTER', 11, who === 0 ? PLAYER_CSS[0] : CPU_CSS, '900');
+    const preview = this.add.graphics();
+    const tx = left + 210;
+    const name = this.add.text(tx, PANEL_Y - PANEL_H / 2 + 22, '', { fontFamily: '"Bungee", "Arial Black", sans-serif', fontSize: '26px', color: '#ffffff', stroke: UI.inkCss, strokeThickness: 5 });
+    const tagline = this.add.text(tx, PANEL_Y - PANEL_H / 2 + 62, '', { fontFamily: FONT_BODY, fontSize: '14px', fontStyle: '700', color: UI.muted });
+    const bars = this.add.graphics();
+    ['SPEED', 'POWER', 'WEIGHT', 'JUMP'].forEach((label, k) => {
+      this.add.text(tx, PANEL_Y - PANEL_H / 2 + 98 + k * 26, label, { fontFamily: FONT_BODY, fontSize: '14px', fontStyle: '900', color: '#ffffff' }).setOrigin(0, 0.5);
+    });
+    const moves = this.add.text(tx, PANEL_Y + 62, '', { fontFamily: FONT_BODY, fontSize: '13px', fontStyle: '500', color: '#b9b4e6', wordWrap: { width: PANEL_W - 230 } });
+    const status = this.add.text(tx, PANEL_Y + PANEL_H / 2 - 24, '', { fontFamily: FONT_BODY, fontSize: '14px', fontStyle: '900', color: UI.muted });
+    this.details.push({ preview, name, tagline, bars, moves, status });
   }
 
   private onKey(code: string): void {
+    if (this.leaving) return;
     if (code === 'Escape') {
       sound.menuBack();
       fadeTo(this, 'Menu');
@@ -206,29 +226,28 @@ export class SelectScene extends Phaser.Scene {
   }
 
   private move(d: number): void {
-    if (this.step === 'player') this.playerIndex = wrap(this.playerIndex + d, FIGHTER_ORDER.length);
-    else if (this.step === 'cpu') this.cpuIndex = wrap(this.cpuIndex + d, FIGHTER_ORDER.length);
-    else if (this.step === 'difficulty') this.difficulty = wrap(this.difficulty + d, CPU_DIFFICULTIES.length);
-    else return;
+    if (this.step === 'player') this.playerIndex = wrap(this.playerIndex + d, N);
+    else if (this.step === 'cpu') this.cpuIndex = wrap(this.cpuIndex + d, N);
+    else this.difficulty = wrap(this.difficulty + d, CPU_DIFFICULTIES.length);
     sound.menuMove();
     this.refresh();
   }
 
   private advance(): void {
-    if (this.step === 'ready') {
-      this.startMatch();
-      return;
-    }
+    if (this.leaving) return;
     sound.menuSelect();
     if (this.step === 'player' || this.step === 'cpu') {
       const who = this.step === 'player' ? 0 : 1;
       this.confirmedAt[who] = this.t;
       const x = cardX(who === 0 ? this.playerIndex : this.cpuIndex);
-      const flash = this.add.circle(x, CARD_Y - 104, 40, who === 0 ? PLAYER_COLORS[0] : CPU_COLOR, 0.8);
-      this.tweens.add({ targets: flash, radius: 140, alpha: 0, duration: 350, onComplete: () => flash.destroy() });
+      const flash = this.add.circle(x, ROSTER_Y - 20, 30, who === 0 ? PLAYER_COLORS[0] : CPU_COLOR, 0.8);
+      this.tweens.add({ targets: flash, radius: 110, alpha: 0, duration: 350, onComplete: () => flash.destroy() });
+    }
+    if (this.step === 'difficulty') {
+      this.toStageSelect();
+      return;
     }
     this.step = STEPS[STEPS.indexOf(this.step) + 1];
-    if (this.step === 'ready') this.startTimer = 90;
     this.refresh();
   }
 
@@ -237,85 +256,101 @@ export class SelectScene extends Phaser.Scene {
     if (i === 0) return;
     sound.menuBack();
     this.step = STEPS[i - 1];
-    this.startTimer = -1;
     this.refresh();
   }
 
-  private refresh(): void {
-    const step = this.step;
-    const at = STEPS.indexOf(step);
-    this.title.setText(STEP_TITLE[step]);
-    this.subtitle.setText(
-      step === 'player' ? 'Step 1 of 3  ·  Pick the fighter YOU will control'
-        : step === 'cpu' ? 'Step 2 of 3  ·  Pick the fighter the CPU will control'
-          : step === 'difficulty' ? 'Step 3 of 3  ·  A / D to choose how tough the CPU is, F to confirm'
-            : 'Starting…',
-    );
-
-    const playerFighter = FIGHTERS[FIGHTER_ORDER[this.playerIndex]];
-    const cpuFighter = FIGHTERS[FIGHTER_ORDER[this.cpuIndex]];
-    const diff = CPU_DIFFICULTIES[this.difficulty];
-    this.panels.p1Name.setText(playerFighter.name.toUpperCase());
-    this.panels.p1Status.setText(at > 0 ? '✔ LOCKED IN' : 'Choosing…').setColor(at > 0 ? '#7ff08f' : UI.muted);
-    const mirror = this.playerIndex === this.cpuIndex;
-    this.panels.cpuName.setText(at >= 1 ? cpuFighter.name.toUpperCase() + (mirror ? ' (ALT)' : '') : '???');
-    this.panels.cpuStatus.setText(
-      at < 2 ? (at === 1 ? 'Choosing fighter…' : 'Waiting for P1…') : DIFFICULTY_BLURB[diff],
-    ).setColor(at >= 3 ? '#7ff08f' : UI.muted);
-
-    const g = this.pillGfx;
-    g.clear();
-    CPU_DIFFICULTIES.forEach((_, k) => {
-      const selected = k === this.difficulty;
-      const active = step === 'difficulty';
-      g.fillStyle(selected ? (active ? UI.accent : 0x6c6796) : 0x2c2660, at >= 2 || selected ? 1 : 0.5);
-      g.fillRoundedRect(pillX(k) - 44, PANEL_Y - 12, 88, 28, 8);
-      if (selected && active) {
-        g.lineStyle(3, 0xffffff, 1);
-        g.strokeRoundedRect(pillX(k) - 44, PANEL_Y - 12, 88, 28, 8);
-      }
-      this.pillText[k].setColor(selected && active ? UI.inkCss : selected ? '#ffffff' : '#8a84bf');
-    });
-
-    this.banner.setVisible(step === 'ready');
-    if (step === 'ready') {
-      this.banner.setScale(0.6);
-      this.tweens.add({ targets: this.banner, scale: 1, duration: 220, ease: 'Back.out' });
-    }
-  }
-
-  private startMatch(): void {
-    if (this.startTimer === -2) return;
-    this.startTimer = -2;
+  private toStageSelect(): void {
+    this.leaving = true;
     const setup: MatchSetup = {
       players: [
         { fighter: FIGHTER_ORDER[this.playerIndex], control: 'human' },
         { fighter: FIGHTER_ORDER[this.cpuIndex], control: 'cpu', difficulty: CPU_DIFFICULTIES[this.difficulty] },
       ],
+      stage: this.previous?.stage,
     };
-    fadeTo(this, 'Battle', { setup });
+    fadeTo(this, 'StageSelect', { setup });
+  }
+
+  private refresh(): void {
+    const at = STEPS.indexOf(this.step);
+    this.title.setText(STEP_TITLE[this.step]);
+    this.subtitle.setText(
+      this.step === 'player' ? 'Step 1 of 3  ·  Pick the fighter YOU will control'
+        : this.step === 'cpu' ? 'Step 2 of 3  ·  Pick the fighter the CPU will control (mirror matches allowed)'
+          : 'Step 3 of 3  ·  Choose how tough the CPU is, then pick a stage',
+    );
+
+    ([0, 1] as const).forEach((who) => {
+      const d = this.details[who];
+      const id = FIGHTER_ORDER[who === 0 ? this.playerIndex : this.cpuIndex];
+      const def = FIGHTERS[id];
+      const hidden = who === 1 && at < 1;
+      const mirror = who === 1 && this.playerIndex === this.cpuIndex;
+      d.name.setText(hidden ? '???' : def.name.toUpperCase() + (mirror ? ' (ALT)' : ''));
+      d.name.setFontSize(def.name.length > 12 ? 20 : 26);
+      d.tagline.setText(hidden ? 'Waiting for P1…' : def.tagline);
+      // The CPU panel needs room for the difficulty pills, so it gets a one-line summary.
+      d.moves.setText(hidden ? '' : who === 0
+        ? `Special: ${def.moves.special.name}  ·  Heavy: ${def.moves.heavy.name}\nWeight class: ${def.ratings.weight}  ·  Difficulty: ${def.ratings.difficulty}`
+        : `Special: ${def.moves.special.name}  ·  ${def.ratings.weight} · ${def.ratings.difficulty}`);
+      const g = d.bars;
+      g.clear();
+      const bx = PANEL_X[who] - PANEL_W / 2 + 300;
+      const values = hidden ? [0, 0, 0, 0] : [def.ratings.speed, def.ratings.power, weightRating(def), def.ratings.jump];
+      values.forEach((v, k) => {
+        const y = PANEL_Y - PANEL_H / 2 + 98 + k * 26;
+        for (let pip = 0; pip < 5; pip++) {
+          g.fillStyle(pip < v ? UI.accent : 0x3a3473, 1);
+          g.fillRoundedRect(bx + pip * 34, y - 8, 28, 16, 4);
+        }
+      });
+      const locked = who === 0 ? at > 0 : at > 1;
+      if (who === 0) d.status.setText(locked ? '✔ LOCKED IN' : 'Choosing…').setColor(locked ? '#7ff08f' : UI.muted);
+      else d.status.setText(at < 2 ? (at === 1 ? 'Choosing fighter…' : '') : `${CPU_PROFILES[CPU_DIFFICULTIES[this.difficulty]].label}: ${DIFFICULTY_BLURB[CPU_DIFFICULTIES[this.difficulty]]}`)
+        .setColor(at === 2 ? '#ffd23f' : UI.muted);
+    });
+
+    const g = this.pillGfx;
+    g.clear();
+    CPU_DIFFICULTIES.forEach((_, k) => {
+      const selected = k === this.difficulty;
+      const active = this.step === 'difficulty';
+      g.fillStyle(selected ? (active ? UI.accent : 0x6c6796) : 0x2c2660, at >= 1 || selected ? 1 : 0.5);
+      g.fillRoundedRect(pillX(k) - 42, PILL_Y - 13, 84, 26, 8);
+      if (selected && active) {
+        g.lineStyle(3, 0xffffff, 1);
+        g.strokeRoundedRect(pillX(k) - 42, PILL_Y - 13, 84, 26, 8);
+      }
+      this.pillText[k].setColor(selected && active ? UI.inkCss : selected ? '#ffffff' : '#8a84bf');
+    });
   }
 
   update(): void {
     this.t++;
     this.backdrop.update();
-    if (this.startTimer > 0 && --this.startTimer === 0) this.startMatch();
     const at = STEPS.indexOf(this.step);
 
-    // Previews: a fighter strikes its victory pose right after being picked.
+    // Roster previews: a fighter strikes its victory pose right after being picked.
     FIGHTER_ORDER.forEach((id, i) => {
       const g = this.previews[i];
       g.clear();
       const recent = (i === this.playerIndex && this.t - this.confirmedAt[0] < 90)
         || (i === this.cpuIndex && this.t - this.confirmedAt[1] < 90);
-      const pose = computePose({
-        fighter: id, action: recent ? 'victory' : 'preview', move: null, actionFrame: 0, grounded: true,
-        vx: 0, vy: 0, runSpeed: 1, t: this.t + i * 30, flip: -1, tumble: false, charge: 0, rocketLaunched: false,
-      });
-      drawFighter(g, id, pose, cardX(i), CARD_Y - CARD_H / 2 + 180, 1, 1.7);
+      drawFighter(g, id, posed(id, recent ? 'victory' : 'preview', this.t + i * 30), cardX(i), ROSTER_Y - CARD_H / 2 + 146, 1, 1.2);
     });
 
-    // Cursors: P1 (red) always; CPU (gray) once it's being picked.
+    // Detail panel previews
+    ([0, 1] as const).forEach((who) => {
+      const g = this.details[who].preview;
+      g.clear();
+      if (who === 1 && at < 1) return;
+      const idx = who === 0 ? this.playerIndex : this.cpuIndex;
+      const id = FIGHTER_ORDER[idx];
+      const alt = who === 1 && this.playerIndex === this.cpuIndex;
+      drawFighter(g, id, posed(id, 'preview', this.t), PANEL_X[who] - PANEL_W / 2 + 99, PANEL_Y + PANEL_H / 2 - 30, 1, 1.75, false, alt);
+    });
+
+    // Cursors on the roster strip
     const g = this.cursorGfx;
     g.clear();
     const pulse = 0.6 + Math.sin(this.t * 0.15) * 0.4;
@@ -327,21 +362,28 @@ export class SelectScene extends Phaser.Scene {
       this.badges[p].setVisible(c.visible);
       if (!c.visible) return;
       const x = cardX(c.index);
-      const inset = p === 1 && this.playerIndex === this.cpuIndex ? 8 : 0;
-      const w = CARD_W + 16 - inset * 2;
-      const h = CARD_H + 16 - inset * 2;
-      g.lineStyle(c.locked ? 8 : 6, c.color, c.locked ? 1 : pulse);
-      g.strokeRoundedRect(x - w / 2, CARD_Y - h / 2, w, h, 24);
-      const bx = x + (p === 0 ? -CARD_W / 2 + 36 : CARD_W / 2 - 40);
-      const by = CARD_Y - CARD_H / 2 - 4;
-      const bw = p === 0 ? 60 : 72;
+      const inset = p === 1 && this.playerIndex === this.cpuIndex ? 6 : 0;
+      const w = CARD_W + 10 - inset * 2;
+      const h = CARD_H + 10 - inset * 2;
+      g.lineStyle(c.locked ? 6 : 5, c.color, c.locked ? 1 : pulse);
+      g.strokeRoundedRect(x - w / 2, ROSTER_Y - h / 2, w, h, 16);
+      const bx = x + (p === 0 ? -CARD_W / 2 + 26 : CARD_W / 2 - 30);
+      const by = ROSTER_Y - CARD_H / 2 - 2;
+      const bw = p === 0 ? 46 : 56;
       g.fillStyle(c.color, 1);
-      g.fillRoundedRect(bx - bw / 2, by - 18, bw, 36, 10);
-      g.lineStyle(3, 0xffffff, 1);
-      g.strokeRoundedRect(bx - bw / 2, by - 18, bw, 36, 10);
-      this.badges[p].setPosition(bx, by).setText(c.locked ? `${c.label}✔` : c.label).setFontSize(c.locked ? 16 : 20);
+      g.fillRoundedRect(bx - bw / 2, by - 14, bw, 28, 8);
+      g.lineStyle(2, 0xffffff, 1);
+      g.strokeRoundedRect(bx - bw / 2, by - 14, bw, 28, 8);
+      this.badges[p].setPosition(bx, by).setText(c.locked ? `${c.label}✔` : c.label).setFontSize(c.locked ? 13 : 16);
     });
   }
+}
+
+function posed(id: FighterId, action: 'victory' | 'preview', t: number) {
+  return computePose({
+    fighter: id, action, move: null, actionFrame: 0, grounded: true,
+    vx: 0, vy: 0, runSpeed: 1, t, flip: -1, tumble: false, charge: 0, rocketLaunched: false,
+  });
 }
 
 function wrap(i: number, n: number): number {

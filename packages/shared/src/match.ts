@@ -3,8 +3,9 @@ import {
   hitboxRect, hitstopFrames, hitstunFrames, hurtboxRect, knockbackSpeed, launchVector,
 } from './combat';
 import {
-  FIGHTERS, hitboxWindow, moveTotalFrames,
-  type FighterDef, type FighterId, type HitboxDef, type MoveDef, type MoveSlot,
+  chargeFrames, FIGHTERS, hitboxWindow, moveTotalFrames,
+  type FighterDef, type FighterId, type HitboxDef, type HitEffect, type MoveDef, type MoveSlot,
+  type ProjectileBehavior, type ProjectileKind,
 } from './fighters';
 import { approach, clamp, lerp, rectsOverlap } from './geometry';
 import { emptyInput, type InputFrame } from './input';
@@ -69,6 +70,8 @@ export interface FighterState {
   comboHits: number;
   /** Consecutive frames this fighter has been free of hitstun/hitstop. */
   freeFrames: number;
+  /** Frames left restrained by a web (set from the web's fixed hitstun). */
+  webbed: number;
   buffer: { action: BufferedAction; frames: number } | null;
   respawnTimer: number;
   lastHitBy: number | null;
@@ -85,9 +88,14 @@ export type GameEvent =
   | { type: 'judge'; id: number; value: number }
   | { type: 'rocket'; id: number; misfire: boolean; charge: number }
   | { type: 'vanish'; id: number; fromX: number; fromY: number }
+  | { type: 'projectile'; id: number; projectileId: number; kind: ProjectileKind; x: number; y: number; charge: number }
+  | { type: 'projectileEnd'; projectileId: number; kind: ProjectileKind; x: number; y: number; hit: boolean }
+  | { type: 'webzip'; id: number; anchorX: number; anchorY: number }
   | {
     type: 'hit'; attacker: number; victim: number; damage: number; x: number; y: number;
     launchSpeed: number; launchX: number; launchY: number; hitstun: number; hitstop: number;
+    /** Set when the hit came from a projectile. */
+    projectile?: ProjectileKind;
   }
   | { type: 'dodge'; id: number }
   | { type: 'ko'; id: number; x: number; y: number; by: number | null }
@@ -96,6 +104,31 @@ export type GameEvent =
   | { type: 'matchEnd'; winner: number | null; reason: 'stocks' | 'time' };
 
 export type MatchPhase = 'countdown' | 'playing' | 'ended';
+
+/** A live projectile (web, batarang, energy beam). Plain data so match state stays serializable. */
+export interface ProjectileState {
+  id: number;
+  owner: number;
+  kind: ProjectileKind;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  w: number;
+  h: number;
+  age: number;
+  life: number;
+  speed: number;
+  returnAfter: number;
+  returning: boolean;
+  piercing: boolean;
+  /** Where it was fired from (beams render from here to the head). */
+  originX: number;
+  originY: number;
+  /** Hit values, fixed at launch (including any charge bonus). */
+  hit: HitEffect;
+  hitVictims: number[];
+}
 
 export interface MatchState {
   frame: number;
@@ -106,6 +139,8 @@ export interface MatchState {
   rules: RulesConfig;
   stage: StageDef;
   fighters: FighterState[];
+  projectiles: ProjectileState[];
+  nextProjectileId: number;
   winner: number | null;
   endReason: 'stocks' | 'time' | null;
   events: GameEvent[];
@@ -163,6 +198,7 @@ export function createFighter(id: number, fighter: FighterId, stage: StageDef, s
     airDodgesUsed: 0,
     comboHits: 0,
     freeFrames: 999,
+    webbed: 0,
     buffer: null,
     respawnTimer: 0,
     lastHitBy: null,
@@ -183,6 +219,8 @@ export function createMatch(players: PlayerSetup[], options: MatchOptions = {}):
     rules,
     stage,
     fighters: players.map((p, i) => createFighter(i, p.fighter, stage, rules.stocks)),
+    projectiles: [],
+    nextProjectileId: 1,
     winner: null,
     endReason: null,
     events: [],
@@ -263,10 +301,13 @@ export function stepMatch(m: MatchState, inputs: InputFrame[]): GameEvent[] {
   for (let i = 0; i < m.fighters.length; i++) {
     updateFighter(m, m.fighters[i], inputs[i] ?? emptyInput());
   }
+  updateProjectiles(m);
   resolveHits(m);
   for (const f of m.fighters) {
     checkBlastZone(m, f);
     f.freeFrames = f.action === 'hitstun' || f.hitstop > 0 ? 0 : f.freeFrames + 1;
+    if (f.action !== 'hitstun') f.webbed = 0;
+    else if (f.webbed > 0 && f.hitstop === 0) f.webbed--;
   }
 
   m.timeLeft = Math.max(0, m.timeLeft - 1);
@@ -473,10 +514,13 @@ function updateAttack(m: MatchState, f: FighterState, input: InputFrame, dir: nu
   }
   const b = move.behavior;
 
-  // Luigi's rocket: hold special on the last startup frame to charge.
+  // Chargeable moves (Luigi's rocket, Goku's strike & Kamehameha): hold the move's button on the
+  // last startup frame to charge.
+  const maxCharge = chargeFrames(move);
+  const button = f.move === 'aerial' ? 'light' : f.move;
   if (
-    b?.type === 'rocket' && !f.rocketLaunched && f.actionFrame === move.startup - 1 &&
-    input.special && f.charge < b.maxChargeFrames
+    maxCharge > 0 && button && f.actionFrame === move.startup - 1 && !f.rocketLaunched &&
+    input[button] && f.charge < maxCharge
   ) {
     f.charge++;
     return;
@@ -508,6 +552,20 @@ function updateAttack(m: MatchState, f: FighterState, input: InputFrame, dir: nu
     f.kbx = 0;
     f.kby = 0;
     if (f.teleport.dy < 0) f.grounded = false;
+  }
+
+  if (b?.type === 'projectile' && fr === move.startup) {
+    if (b.airUpZip && !f.grounded && (input.up || input.jump)) {
+      // Web-zip: pull upward instead of firing.
+      f.vx = b.airUpZip.vx * f.facing;
+      f.vy = b.airUpZip.vy;
+      f.kbx = 0;
+      f.kby = 0;
+      f.fastFalling = false;
+      m.events.push({ type: 'webzip', id: f.id, anchorX: f.x + f.facing * 110, anchorY: f.y - 300 });
+    } else {
+      spawnProjectile(m, f, move, b);
+    }
   }
 
   const imp = move.impulse;
@@ -733,17 +791,18 @@ function land(m: MatchState, f: FighterState, top: number): void {
 interface PendingHit {
   attacker: FighterState;
   victim: FighterState;
-  hitbox: HitboxDef;
   /**
    * Everything about the attack is captured when the overlap is detected, so that two fighters
    * hitting each other on the same frame (a trade) both take their hits — even though applying
    * the first hit interrupts the other fighter's attack.
    */
-  move: MoveDef;
-  values: ReturnType<typeof resolveHitboxValues>;
+  move: MoveDef | null;
+  values: HitValues;
   direction: 1 | -1;
   x: number;
   y: number;
+  /** Projectile hits don't freeze the (distant) attacker. */
+  projectile: ProjectileState | null;
 }
 
 function resolveHits(m: MatchState): void {
@@ -767,15 +826,132 @@ function resolveHits(m: MatchState): void {
         const y = (Math.max(rect.y, hurt.y) + Math.min(rect.y + rect.h, hurt.y + hurt.h)) / 2;
         let direction: 1 | -1 = att.facing;
         if (hb.autoDirection && vic.x !== att.x) direction = vic.x > att.x ? 1 : -1;
-        pending.push({ attacker: att, victim: vic, hitbox: hb, move, values: resolveHitboxValues(att, move, hb), direction, x, y });
+        pending.push({
+          attacker: att, victim: vic, move, values: resolveHitboxValues(att, move, hb), direction, x, y, projectile: null,
+        });
       }
     }
   }
+
+  // Projectiles use the same hurtboxes, intangibility rules and hit pipeline.
+  for (const p of m.projectiles) {
+    const owner = m.fighters[p.owner];
+    const rect = projectileRect(p);
+    for (const vic of m.fighters) {
+      if (vic.id === p.owner || p.hitVictims.includes(vic.id) || isIntangible(vic, m.rules)) continue;
+      const hurt = hurtboxRect(vic, fighterDef(vic).stats);
+      if (!rectsOverlap(rect, hurt)) continue;
+      p.hitVictims.push(vic.id);
+      const direction: 1 | -1 = p.vx !== 0 ? (p.vx > 0 ? 1 : -1) : (vic.x >= p.x ? 1 : -1);
+      pending.push({
+        attacker: owner, victim: vic, move: null, values: hitEffectValues(p.hit), direction,
+        x: (Math.max(rect.x, hurt.x) + Math.min(rect.x + rect.w, hurt.x + hurt.w)) / 2,
+        y: (Math.max(rect.y, hurt.y) + Math.min(rect.y + rect.h, hurt.y + hurt.h)) / 2,
+        projectile: p,
+      });
+      if (!p.piercing) p.life = 0; // non-piercing projectiles end on their first hit
+    }
+  }
+  m.projectiles = m.projectiles.filter((p) => {
+    if (p.life > 0) return true;
+    m.events.push({ type: 'projectileEnd', projectileId: p.id, kind: p.kind, x: p.x, y: p.y, hit: p.hitVictims.length > 0 });
+    return false;
+  });
+
   for (const h of pending) applyHit(m, h);
 }
 
+export interface HitValues {
+  damage: number;
+  baseKnockback: number;
+  knockbackGrowth: number;
+  angle: number;
+  hitstunMultiplier: number;
+  stunFrames?: number;
+  restrain?: boolean;
+}
+
+function hitEffectValues(h: HitEffect): HitValues {
+  return {
+    damage: h.damage, baseKnockback: h.baseKnockback, knockbackGrowth: h.knockbackGrowth, angle: h.angle,
+    hitstunMultiplier: h.hitstunMultiplier ?? 1, stunFrames: h.stunFrames, restrain: h.restrain,
+  };
+}
+
+/** Applies a move's charge bonus (0 when uncharged) to hit values. */
+function applyCharge(v: HitValues, move: MoveDef, charge: number): HitValues {
+  if (!move.charge || charge <= 0) return v;
+  const ratio = Math.min(1, charge / move.charge.maxFrames);
+  return {
+    ...v,
+    damage: Math.round(v.damage * (1 + ratio * move.charge.damageBonus)),
+    baseKnockback: v.baseKnockback * (1 + ratio * move.charge.knockbackBonus),
+  };
+}
+
+export function projectileRect(p: ProjectileState) {
+  return { x: p.x - p.w / 2, y: p.y - p.h / 2, w: p.w, h: p.h };
+}
+
+function spawnProjectile(m: MatchState, f: FighterState, move: MoveDef, b: ProjectileBehavior): void {
+  const x = f.x + b.offsetX * f.facing;
+  const y = f.y + b.offsetY;
+  const hit = applyCharge(hitEffectValues(b.hit), move, f.charge);
+  const p: ProjectileState = {
+    id: m.nextProjectileId++,
+    owner: f.id,
+    kind: b.kind,
+    x, y,
+    vx: b.speed * f.facing,
+    vy: 0,
+    w: b.w,
+    h: b.h,
+    age: 0,
+    life: b.life,
+    speed: b.speed,
+    returnAfter: b.returnAfter ?? 0,
+    returning: false,
+    piercing: !!b.piercing,
+    originX: x,
+    originY: y,
+    hit,
+    hitVictims: [],
+  };
+  m.projectiles.push(p);
+  const ratio = move.charge ? Math.min(1, f.charge / move.charge.maxFrames) : 0;
+  m.events.push({ type: 'projectile', id: f.id, projectileId: p.id, kind: p.kind, x, y, charge: ratio });
+}
+
+function updateProjectiles(m: MatchState): void {
+  const bz = m.stage.blastZone;
+  for (const p of m.projectiles) {
+    p.age++;
+    p.life--;
+    const owner = m.fighters[p.owner];
+    // Boomerangs turn around and home back to their owner.
+    if (p.returnAfter > 0 && p.age >= p.returnAfter && owner && owner.action !== 'dead' && !owner.eliminated) {
+      p.returning = true;
+      const tx = owner.x;
+      const ty = owner.y - fighterDef(owner).stats.height * 0.6;
+      const d = Math.hypot(tx - p.x, ty - p.y) || 1;
+      p.vx = ((tx - p.x) / d) * p.speed;
+      p.vy = ((ty - p.y) / d) * p.speed;
+      if (d < 30) p.life = 0; // caught
+    }
+    p.x += p.vx * DT;
+    p.y += p.vy * DT;
+    if (p.x < bz.left || p.x > bz.right || p.y < bz.top || p.y > bz.bottom) p.life = 0;
+    // Physical projectiles break on solid ground; energy beams pass over it.
+    if (p.kind !== 'beam') {
+      for (const pl of m.stage.platforms) {
+        if (!pl.oneWay && p.x > pl.x1 && p.x < pl.x2 && p.y > pl.y && p.y < pl.y + pl.height) p.life = 0;
+      }
+    }
+  }
+}
+
 /** Resolves the effective damage/knockback of a hitbox, accounting for move behaviors. */
-export function resolveHitboxValues(f: FighterState, move: MoveDef, hb: HitboxDef) {
+export function resolveHitboxValues(f: FighterState, move: MoveDef, hb: HitboxDef): HitValues {
   let damage = hb.damage;
   let baseKnockback = hb.baseKnockback;
   let knockbackGrowth = hb.knockbackGrowth;
@@ -794,7 +970,11 @@ export function resolveHitboxValues(f: FighterState, move: MoveDef, hb: HitboxDe
     damage = f.misfire ? b.misfireDamage : Math.round(lerp(b.minDamage, b.maxDamage, ratio));
     baseKnockback = f.misfire ? b.misfireBaseKnockback : lerp(b.minBaseKnockback, b.maxBaseKnockback, ratio);
   }
-  return { damage, baseKnockback, knockbackGrowth, angle, hitstunMultiplier };
+  return applyCharge(
+    { damage, baseKnockback, knockbackGrowth, angle, hitstunMultiplier, stunFrames: hb.stunFrames, restrain: hb.restrain },
+    move,
+    f.charge,
+  );
 }
 
 function applyHit(m: MatchState, h: PendingHit): void {
@@ -815,7 +995,10 @@ function applyHit(m: MatchState, h: PendingHit): void {
   vic.vx = 0;
   vic.vy = 0;
   if (launch.y < 0) vic.grounded = false;
-  vic.hitstun = hitstunFrames(speed, m.rules, v.hitstunMultiplier, vic.comboHits);
+  vic.hitstun = v.stunFrames !== undefined
+    ? Math.max(1, Math.round(v.stunFrames * Math.max(cb.comboHitstunFloor, Math.pow(cb.comboHitstunDecay, vic.comboHits))))
+    : hitstunFrames(speed, m.rules, v.hitstunMultiplier, vic.comboHits);
+  vic.webbed = v.restrain ? vic.hitstun : 0;
   vic.action = 'hitstun';
   vic.move = null;
   vic.fastFalling = false;
@@ -831,13 +1014,13 @@ function applyHit(m: MatchState, h: PendingHit): void {
 
   const stop = hitstopFrames(v.damage, m.rules);
   vic.hitstop = stop;
-  att.hitstop = Math.max(att.hitstop, stop);
+  if (!h.projectile) att.hitstop = Math.max(att.hitstop, stop);
 
   att.stats.damageDealt += v.damage;
   vic.stats.damageTaken += v.damage;
 
   // Rebound (Luigi's rocket) — only if the attacker is still in that move (not traded out of it).
-  if (move.stopOnHit && att.action === 'attack' && currentMove(att) === move) {
+  if (move?.stopOnHit && att.action === 'attack' && currentMove(att) === move) {
     att.vx = -att.facing * cb.reboundSpeedX;
     att.vy = -cb.reboundSpeedY;
     att.grounded = false;
@@ -847,6 +1030,7 @@ function applyHit(m: MatchState, h: PendingHit): void {
   m.events.push({
     type: 'hit', attacker: att.id, victim: vic.id, damage: v.damage, x: h.x, y: h.y,
     launchSpeed: speed, launchX: launch.x, launchY: launch.y, hitstun: vic.hitstun, hitstop: stop,
+    ...(h.projectile ? { projectile: h.projectile.kind } : {}),
   });
 }
 

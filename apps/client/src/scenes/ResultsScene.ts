@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { FIGHTERS } from '@arena-rush/shared';
+import { FIGHTERS, getStage } from '@arena-rush/shared';
 import { sound } from '../audio/sound';
 import { drawFighter, shade } from '../render/art';
 import { Backdrop } from '../render/backdrop';
@@ -67,7 +67,7 @@ export class ResultsScene extends Phaser.Scene {
       sound.victory();
     }
     const cpuIndex = s.setup.players.findIndex((p) => p.control === 'cpu');
-    const vs = cpuIndex >= 0 ? `  ·  vs ${slotDescription(s.setup, cpuIndex)}` : '';
+    const vs = (cpuIndex >= 0 ? `  ·  vs ${slotDescription(s.setup, cpuIndex)}` : '') + `  ·  ${getStage(s.setup.stage).name}`;
     bodyText(this, 320, 196, (s.reason === 'time' ? 'Decided on time' : 'Last fighter standing') + vs, 15, UI.muted, '700');
 
     // Standings table
@@ -98,7 +98,7 @@ export class ResultsScene extends Phaser.Scene {
     bodyText(this, tx, 395, `Match time ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`, 14, UI.muted, '500');
 
     new Menu(this, tx, 480, [
-      { label: () => 'REMATCH', hint: 'Same fighters & difficulty', action: () => fadeTo(this, 'Battle', { setup: s.setup }) },
+      { label: () => 'REMATCH', hint: 'Same fighters, difficulty & stage', action: () => fadeTo(this, 'Battle', { setup: s.setup }) },
       { label: () => 'CHARACTER SELECT', action: () => fadeTo(this, 'Select', { previous: s.setup }) },
       { label: () => 'MAIN MENU', action: () => fadeTo(this, 'Menu') },
     ], 400, 70);

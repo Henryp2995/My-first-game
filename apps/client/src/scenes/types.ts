@@ -1,4 +1,4 @@
-import { CPU_PROFILES, type CpuDifficulty, type FighterId, type FighterMatchStats } from '@arena-rush/shared';
+import { CPU_PROFILES, type CpuDifficulty, type FighterId, type FighterMatchStats, type StageId } from '@arena-rush/shared';
 import { CPU_COLOR, CPU_CSS, PLAYER_COLORS, PLAYER_CSS } from '../theme';
 
 /**
@@ -11,6 +11,8 @@ export type PlayerSlot =
 
 export interface MatchSetup {
   players: PlayerSlot[];
+  /** Chosen on the stage select screen (missing → Skyfall Arena). */
+  stage?: StageId;
 }
 
 export interface MatchSummary {

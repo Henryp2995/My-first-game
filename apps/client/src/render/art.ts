@@ -20,7 +20,69 @@ const RIGS: Record<FighterId, Rig> = {
   gnw: { hipH: 30, thigh: 15, shin: 15, torso: 18, neck: 2, headR: 11, upperArm: 13, foreArm: 12, limbW: 4.5, legW: 5, torsoW: 15 },
   luigi: { hipH: 34, thigh: 17, shin: 17, torso: 24, neck: 3, headR: 14, upperArm: 15, foreArm: 13, limbW: 8, legW: 10, torsoW: 25 },
   sheik: { hipH: 40, thigh: 20, shin: 20, torso: 22, neck: 4, headR: 11, upperArm: 15, foreArm: 14, limbW: 6.5, legW: 7.5, torsoW: 17 },
+  spiderman: { hipH: 38, thigh: 19, shin: 19, torso: 22, neck: 3, headR: 11, upperArm: 15, foreArm: 14, limbW: 6.5, legW: 7.5, torsoW: 17 },
+  batman: { hipH: 40, thigh: 20, shin: 20, torso: 28, neck: 3, headR: 12.5, upperArm: 17, foreArm: 15, limbW: 9, legW: 10.5, torsoW: 26 },
+  naruto: { hipH: 35, thigh: 17.5, shin: 17.5, torso: 21, neck: 3, headR: 13, upperArm: 14, foreArm: 13, limbW: 7, legW: 8, torsoW: 19 },
+  goku: { hipH: 38, thigh: 19, shin: 19, torso: 25, neck: 3, headR: 12, upperArm: 16, foreArm: 14, limbW: 8.5, legW: 9.5, torsoW: 23 },
 };
+
+/** Colors for the four crossover fighters, drawn by the shared "hero" path below. */
+export interface HeroColors {
+  outline: number;
+  suit: number;
+  suit2: number;
+  upperArm: number;
+  foreArm: number;
+  hand: number;
+  thigh: number;
+  shin: number;
+  boot: number;
+  skin: number;
+  hair: number;
+  eye: number;
+  accent: number;
+  accent2: number;
+  cape: number;
+}
+
+type HeroId = 'spiderman' | 'batman' | 'naruto' | 'goku';
+
+const HERO_COLORS: Record<HeroId, HeroColors> = {
+  spiderman: {
+    outline: 0x1a0d14, suit: 0xd62828, suit2: 0x2546b8, upperArm: 0xd62828, foreArm: 0xd62828, hand: 0xd62828,
+    thigh: 0x2546b8, shin: 0xd62828, boot: 0xd62828, skin: 0xd62828, hair: 0xd62828, eye: 0xffffff,
+    accent: 0x1a0d14, accent2: 0x111111, cape: 0,
+  },
+  batman: {
+    outline: 0x0b0b12, suit: 0x5d6273, suit2: 0x5d6273, upperArm: 0x5d6273, foreArm: 0x23232c, hand: 0x23232c,
+    thigh: 0x5d6273, shin: 0x23232c, boot: 0x23232c, skin: 0xe8b48f, hair: 0x23232c, eye: 0xffffff,
+    accent: 0x16161d, accent2: 0xe6c229, cape: 0x1f1f2a,
+  },
+  naruto: {
+    outline: 0x2a1408, suit: 0xff8c1a, suit2: 0x1f2a44, upperArm: 0xff8c1a, foreArm: 0xff8c1a, hand: 0xf6c79a,
+    thigh: 0xff8c1a, shin: 0xff8c1a, boot: 0x2a3b8f, skin: 0xf6c79a, hair: 0xffd23a, eye: 0x2f7fe0,
+    accent: 0xb9c2cc, accent2: 0x1f3a8a, cape: 0,
+  },
+  goku: {
+    outline: 0x1d0f08, suit: 0xff7a1a, suit2: 0x1f4fbf, upperArm: 0x1f4fbf, foreArm: 0xf3c79c, hand: 0xf3c79c,
+    thigh: 0xff7a1a, shin: 0xff7a1a, boot: 0x1f4fbf, skin: 0xf3c79c, hair: 0x16161c, eye: 0x16161c,
+    accent: 0x1f4fbf, accent2: 0xffd23f, cape: 0,
+  },
+};
+
+const HERO_ALT_COLORS: Record<HeroId, HeroColors> = {
+  spiderman: {
+    ...HERO_COLORS.spiderman, suit: 0x1b1b24, suit2: 0x1b1b24, upperArm: 0x1b1b24, foreArm: 0x1b1b24, hand: 0x1b1b24,
+    thigh: 0x1b1b24, shin: 0x1b1b24, boot: 0x1b1b24, skin: 0x1b1b24, hair: 0x1b1b24, accent: 0x6a6a7a, accent2: 0xf2f2f2,
+  },
+  batman: { ...HERO_COLORS.batman, foreArm: 0x1f2e6b, hand: 0x1f2e6b, shin: 0x1f2e6b, boot: 0x1f2e6b, hair: 0x1f2e6b, cape: 0x1f2e6b, suit: 0x8b90a0, suit2: 0x8b90a0, upperArm: 0x8b90a0, thigh: 0x8b90a0 },
+  naruto: { ...HERO_COLORS.naruto, suit: 0x26262f, upperArm: 0x26262f, foreArm: 0x26262f, thigh: 0x26262f, shin: 0x26262f, suit2: 0xff8c1a },
+  goku: { ...HERO_COLORS.goku, suit: 0x2a5ad8, thigh: 0x2a5ad8, shin: 0x2a5ad8, suit2: 0xff8c1a, upperArm: 0xff8c1a, accent: 0xff8c1a, boot: 0xff8c1a },
+};
+
+function isHero(id: FighterId): id is HeroId {
+  return id in HERO_COLORS;
+}
 
 export interface Palette {
   outline: number;
@@ -37,7 +99,9 @@ export interface Palette {
   emblem: number;
 }
 
-export const PALETTES: Record<FighterId, Palette> = {
+type ClassicId = Exclude<FighterId, HeroId>;
+
+export const PALETTES: Record<ClassicId, Palette> = {
   gnw: {
     outline: 0x000000, body: 0x141414, accent: 0x141414, accent2: 0x141414, skin: 0x141414,
     detail: 0xffffff, hands: 0x141414, feet: 0x141414, eye: 0xffffff, hair: 0x141414, emblem: 0x141414,
@@ -53,17 +117,29 @@ export const PALETTES: Record<FighterId, Palette> = {
 };
 
 /** Alternate costumes, used when two players pick the same fighter. */
-export const ALT_PALETTES: Record<FighterId, Palette> = {
+export const ALT_PALETTES: Record<ClassicId, Palette> = {
   gnw: { ...PALETTES.gnw, body: 0x1e2a66, accent: 0x1e2a66, accent2: 0x1e2a66, skin: 0x1e2a66, hands: 0x1e2a66, feet: 0x1e2a66, hair: 0x1e2a66, emblem: 0x1e2a66 },
   luigi: { ...PALETTES.luigi, body: 0xf4f4f4, accent: 0x2fa84f, accent2: 0xffd23f, emblem: 0x2fa84f },
   sheik: { ...PALETTES.sheik, body: 0x5a1630, accent: 0xa8324f, outline: 0x22081a },
 };
+
+/** Legacy palette view of the heroes (only `outline` is used by shared code paths). */
+function heroPalette(c: HeroColors): Palette {
+  return {
+    outline: c.outline, body: c.suit, accent: c.suit2, accent2: c.accent2, skin: c.skin, detail: c.accent,
+    hands: c.hand, feet: c.boot, eye: c.eye, hair: c.hair, emblem: c.accent,
+  };
+}
 
 /** Representative color for UI (stock icons, card tints). */
 export const FIGHTER_UI_COLOR: Record<FighterId, number> = {
   gnw: 0xc9d4a6,
   luigi: 0x2fb350,
   sheik: 0x3a56c4,
+  spiderman: 0xd62828,
+  batman: 0x8a93a8,
+  naruto: 0xff8c1a,
+  goku: 0x2f6fe0,
 };
 
 function whitePalette(p: Palette): Palette {
@@ -77,6 +153,8 @@ export interface DrawResult {
   head: V;
   top: number;
   propAnchor: V | null;
+  /** Front hand position in world space (for held effects like energy orbs). */
+  handF: V;
 }
 
 /**
@@ -95,7 +173,8 @@ export function drawFighter(
   alt = false,
 ): DrawResult {
   const rig = RIGS[id];
-  const basePal = alt ? ALT_PALETTES[id] : PALETTES[id];
+  const hero = isHero(id) ? (alt ? HERO_ALT_COLORS[id] : HERO_COLORS[id]) : null;
+  const basePal = hero ? heroPalette(hero) : alt ? ALT_PALETTES[id as ClassicId] : PALETTES[id as ClassicId];
   const pal = flash ? whitePalette(basePal) : basePal;
   const facing = (pose.flip ? -facingIn : facingIn) as 1 | -1;
   const s = scale;
@@ -233,6 +312,8 @@ export function drawFighter(
       seg({ x: bottom.x, y: bottom.y - 10 }, { x: bottom.x + 5, y: bottom.y - 10 }, 3, pal.body);
     }
   };
+
+  if (hero) return drawHero(hero);
 
   // --- Back limbs -----------------------------------------------------------
   const backShade = (c: number) => (flash || id === 'gnw' ? c : shade(c, 0.78));
@@ -379,7 +460,203 @@ export function drawFighter(
 
   const headW = T(head.x, head.y);
   const top = Math.min(headW.y - r * s * 1.6, T(shoulder.x, shoulder.y).y - r * 2 * s);
-  return { head: headW, top, propAnchor };
+  return { head: headW, top, propAnchor, handF: T(armF[2].x, armF[2].y) };
+
+  /** The four crossover fighters share one body plan with per-character details. */
+  function drawHero(colors: HeroColors): DrawResult {
+    const W = 0xffffff;
+    const c = (col: number) => (flash ? W : col);
+    const dim = (col: number) => (flash ? W : shade(col, 0.78));
+    const r = rig.headR;
+    const heroId = id as HeroId;
+
+    // Cape (behind everything).
+    if (colors.cape) {
+      const flare = pose.flare;
+      const back = { x: shoulder.x - 6, y: shoulder.y + 2 };
+      const pts = [
+        T(shoulder.x + 4, shoulder.y - 2),
+        T(back.x - 10 - flare * 18, hip.y + 6 - flare * 6),
+        T(back.x - 22 - flare * 30, hip.y + rig.thigh + 6 - flare * 14),
+        T(hip.x - 8 - flare * 10, hip.y + rig.thigh + 10 - flare * 8),
+        T(hip.x + 2, hip.y),
+      ];
+      g.fillStyle(ol, 1);
+      g.fillPoints(pts.map((p, i) => (i === 0 || i === pts.length - 1 ? p : { x: p.x - facing * 2 * s, y: p.y + 2 * s })), true);
+      g.fillStyle(c(colors.cape), 1);
+      g.fillPoints(pts, true);
+    }
+
+    const armBack = () => {
+      outlined([armB[0], armB[1]], rig.limbW, dim(colors.upperArm));
+      outlined([armB[1], armB[2]], rig.limbW, dim(colors.foreArm));
+      dot(armB[2], rig.limbW * 0.62, dim(colors.hand));
+    };
+    const legBack = () => {
+      outlined([legB[0], legB[1]], rig.legW, dim(colors.thigh));
+      outlined([legB[1], legB[2]], rig.legW, dim(colors.shin));
+      seg(legB[2], { x: legB[2].x + 6, y: legB[2].y + 1 }, rig.legW * 0.8, dim(colors.boot));
+    };
+    armBack();
+    legBack();
+
+    // Torso
+    outlined([hip, shoulder], rig.torsoW, c(colors.suit));
+    const at = (t: number, dx = 0) => ({ x: hip.x + (shoulder.x - hip.x) * t + dx, y: hip.y + (shoulder.y - hip.y) * t });
+    /** A band across the torso at height t (0 = hip, 1 = shoulder). */
+    function belt(t: number, thickness: number, color: number) {
+      const half = rig.torsoW / 2 - thickness / 2 + 0.5;
+      seg(at(t, -half), at(t, half), thickness, color);
+    }
+    if (heroId === 'spiderman') {
+      seg(hip, at(0.38), rig.torsoW, c(colors.suit2));
+      // spider emblem + web lines
+      const e = at(0.68, 3);
+      dot(e, 2.4, c(colors.accent2));
+      for (const [ox, oy] of [[-5, -3], [5, -3], [-5, 3], [5, 3]]) seg(e, { x: e.x + ox, y: e.y + oy }, 1.1, c(colors.accent2));
+      for (const t of [0.5, 0.82]) seg(at(t, -rig.torsoW * 0.4), at(t, rig.torsoW * 0.4), 0.9, c(colors.accent));
+    } else if (heroId === 'batman') {
+      const e = at(0.7, 2);
+      const bat: [number, number][] = [[-9, 0], [-5, -2.5], [-2.5, -4.5], [0, -2.5], [2.5, -4.5], [5, -2.5], [9, 0], [6, 1.5], [3.5, 3.5], [0, 1.5], [-3.5, 3.5], [-6, 1.5]];
+      g.fillStyle(c(colors.accent), 1);
+      g.fillPoints(bat.map(([bx, by]) => T(e.x + bx, e.y + by)), true);
+      belt(0.08, 5.5, c(colors.accent2));
+      for (const dx of [-7, 0, 7]) dot(at(0.08, dx), 2.2, c(shade(colors.accent2, 0.75)));
+    } else if (heroId === 'naruto') {
+      seg(at(0.72), shoulder, rig.torsoW, c(colors.suit2));
+      dot(at(1, 2), rig.torsoW * 0.32, c(W));
+      seg(at(0.08, rig.torsoW * 0.3), at(0.7, rig.torsoW * 0.3), 1.2, c(W));
+      dot(at(0.0), rig.torsoW * 0.38, c(colors.suit2));
+    } else {
+      // Goku: undershirt V, belt, chest patch
+      seg(at(0.86, 4), shoulder, rig.torsoW * 0.45, c(colors.suit2));
+      belt(0.06, 5, c(colors.accent));
+      const e = at(0.62, 4);
+      dot(e, 4.2, c(W));
+      g.lineStyle(1.2 * s, c(colors.outline), 1);
+      const E = T(e.x, e.y);
+      g.strokeCircle(E.x, E.y, 4.2 * s);
+    }
+
+    // Front leg
+    outlined([legF[0], legF[1]], rig.legW, c(colors.thigh));
+    outlined([legF[1], legF[2]], rig.legW, c(colors.shin));
+    if (heroId === 'goku') seg(lerpV(legF[1], legF[2], 0.55), legF[2], rig.legW + 1, c(colors.boot));
+    seg(legF[2], { x: legF[2].x + 7, y: legF[2].y + 1 }, rig.legW * 0.85, c(colors.boot));
+
+    // Head
+    drawHeroHead(heroId, colors, c, r);
+
+    // Front arm
+    outlined([armF[0], armF[1]], rig.limbW, c(colors.upperArm));
+    outlined([armF[1], armF[2]], rig.limbW, c(colors.foreArm));
+    if (heroId === 'goku') seg(lerpV(armF[1], armF[2], 0.7), lerpV(armF[1], armF[2], 0.95), rig.limbW + 2, c(colors.accent));
+    if (heroId === 'batman') {
+      // gauntlet fins
+      for (const t of [0.35, 0.6]) {
+        const p0 = lerpV(armF[1], armF[2], t);
+        const p1 = lerpV(armF[1], armF[2], t + 0.15);
+        const nx = -(armF[2].y - armF[1].y) * 0.25;
+        const ny = (armF[2].x - armF[1].x) * 0.25;
+        g.fillStyle(c(colors.foreArm), 1);
+        g.fillTriangle(...flat(T(p0.x, p0.y)), ...flat(T(p1.x, p1.y)), ...flat(T(p0.x - nx, p0.y - ny)));
+      }
+    }
+    if (heroId === 'spiderman') stripes2(armF[1], armF[2], rig.limbW, c(colors.accent));
+    const H = T(armF[2].x, armF[2].y);
+    g.fillStyle(ol, 1);
+    g.fillCircle(H.x, H.y, (rig.limbW * 0.62 + 1.6) * s);
+    g.fillStyle(c(colors.hand), 1);
+    g.fillCircle(H.x, H.y, rig.limbW * 0.62 * s);
+
+    const headW = T(head.x, head.y);
+    const top = Math.min(headW.y - r * s * 1.8, T(shoulder.x, shoulder.y).y - r * 2 * s);
+    return { head: headW, top, propAnchor: null, handF: T(armF[2].x, armF[2].y) };
+  }
+
+  function drawHeroHead(heroId: HeroId, colors: HeroColors, c: (n: number) => number, r: number) {
+    const W = 0xffffff;
+    if (heroId === 'spiderman') {
+      poly(ellipse(0, 0, r, r * 1.08), c(colors.skin), ol);
+      // web lines radiating from the face center
+      const cx = r * 0.35;
+      for (let k = 0; k < 7; k++) {
+        const a = (k / 7) * Math.PI * 2;
+        const p0 = HP(cx, 0);
+        const p1 = HP(Math.cos(a) * r * 0.95, Math.sin(a) * r);
+        g.lineStyle(0.9 * s, c(colors.accent), 0.85);
+        g.lineBetween(p0.x, p0.y, p1.x, p1.y);
+      }
+      g.lineStyle(0.9 * s, c(colors.accent), 0.85);
+      g.strokePoints(ellipse(cx * 0.5, 0, r * 0.55, r * 0.6).map(([px, py]) => HP(px, py)), false);
+      poly([[2.5, -7.5], [11, -6], [12.5, 0.5], [6.5, 2.5], [2, -1.5]], c(colors.eye), colors.accent2 === 0xf2f2f2 && !flash ? 0x111111 : c(colors.accent2), 2.2);
+      if (pose.expression === 'hurt') poly(ellipse(7, 7, 3, 1.5), c(colors.accent));
+    } else if (heroId === 'batman') {
+      poly(ellipse(0, 0, r, r * 1.05), c(colors.hair), ol);
+      poly([[-7, -r * 0.75], [-4.5, -r * 1.7], [-1, -r * 0.85]], c(colors.hair), ol, 1.5);
+      poly([[2, -r * 0.88], [5.5, -r * 1.75], [8.5, -r * 0.7]], c(colors.hair), ol, 1.5);
+      poly([[1, 2], [r + 1, 1], [r + 0.5, 7], [7, r * 0.95], [0, r * 0.92]], c(colors.skin), ol, 1.5);
+      poly([[3.5, -3.5], [r - 0.5, -3.5], [r - 1.5, -1.2], [4.5, -1.2]], c(colors.eye));
+      const m0 = HP(6, 6.5);
+      const m1 = HP(r - 1, 6);
+      g.lineStyle(1.3 * s, ol, 1);
+      g.lineBetween(m0.x, m0.y, m1.x, m1.y);
+    } else if (heroId === 'naruto') {
+      // back hair spikes, face, headband, bangs
+      poly([[-r * 0.6, 7], [-r * 1.55, 1], [-r * 1.0, -5], [-r * 1.6, -11], [-r * 0.65, -r * 0.95], [-r * 0.85, -r * 1.6],
+        [-2, -r * 1.12], [1, -r * 1.75], [5, -r * 1.1], [9, -r * 1.55], [r * 0.8, -r * 0.7], [r * 1.35, -r * 0.8], [r * 0.95, -3]], c(colors.hair), ol, 1.8);
+      poly(ellipse(0.5, 1, r * 0.98, r), c(colors.skin), ol);
+      const tail0 = HP(-r * 0.9, -4);
+      const tail1 = HP(-r * 1.7, 4);
+      g.lineStyle(3 * s, c(colors.accent2), 1);
+      g.lineBetween(tail0.x, tail0.y, tail1.x, tail1.y);
+      poly([[-r * 0.98, -7], [r + 0.8, -8], [r + 0.8, -2.5], [-r * 0.98, -1.5]], c(colors.accent2));
+      poly([[2, -8.5], [r - 0.5, -9], [r - 0.5, -2], [2, -1.5]], c(colors.accent), ol, 1);
+      poly([[-2, -r * 0.62], [1, -r * 1.2], [4, -r * 0.7], [7, -r * 1.25], [9.5, -r * 0.62]], c(colors.hair), ol, 1.2);
+      headDot(7, 2, 2.6, c(W));
+      headDot(7.8, 2.2, 1.7, c(colors.eye));
+      g.lineStyle(1 * s, c(colors.outline), 0.8);
+      for (const wy of [5.5, 7.5, 9.5]) {
+        const a = HP(3, wy);
+        const b = HP(8, wy - 0.5);
+        g.lineBetween(a.x, a.y, b.x, b.y);
+      }
+      if (pose.expression === 'happy' || pose.expression === 'focus') poly(ellipse(r * 0.6, 9, 3, 1.6, 0, Math.PI, 8), c(0xffffff), ol, 1);
+    } else {
+      // Goku
+      poly([[-r * 0.7, 7], [-r * 1.75, 1], [-r * 1.05, -5], [-r * 1.85, -11], [-r * 0.75, -r * 0.95], [-r * 1.1, -r * 1.8],
+        [-1, -r * 1.12], [3, -r * 1.95], [6, -r * 1.05], [r * 1.05, -r * 1.55], [r * 0.85, -r * 0.6], [r * 1.25, -1.5], [r * 0.6, -2]], c(colors.hair), ol, 1.8);
+      poly(ellipse(0.5, 1.5, r * 0.95, r * 0.98), c(colors.skin), ol);
+      headDot(-3, 3, 3, c(shade(colors.skin, 0.88)));
+      poly([[0, -r * 0.7], [3, -3.5], [5.5, -r * 0.82], [8, -4], [r * 0.95, -r * 0.62], [r * 0.5, -r * 1.05], [1, -r * 1.0]], c(colors.hair), ol, 1.2);
+      headDot(7, 1.5, 1.9, c(colors.eye));
+      const b0 = HP(4.5, -2);
+      const b1 = HP(10, -3);
+      g.lineStyle(1.6 * s, c(colors.eye), 1);
+      g.lineBetween(b0.x, b0.y, b1.x, b1.y);
+      if (pose.expression === 'focus' || pose.expression === 'happy') {
+        const m0 = HP(6, 8);
+        const m1 = HP(r - 1, 7.5);
+        g.lineStyle(1.3 * s, ol, 1);
+        g.lineBetween(m0.x, m0.y, m1.x, m1.y);
+      }
+    }
+  }
+
+  function stripes2(a: V, b: V, w: number, color: number) {
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const nx = (-dy / len) * (w / 2);
+    const ny = (dx / len) * (w / 2);
+    g.lineStyle(0.9 * s, color, 0.8);
+    for (const t of [0.3, 0.55, 0.8]) {
+      const p = lerpV(a, b, t);
+      const p1 = T(p.x + nx, p.y + ny);
+      const p2 = T(p.x - nx, p.y - ny);
+      g.lineBetween(p1.x, p1.y, p2.x, p2.y);
+    }
+  }
 
   function drawShoe(ankle: V, color: number) {
     if (id === 'luigi') {
@@ -409,6 +686,10 @@ export function drawFighter(
       g.lineBetween(p1.x, p1.y, p2.x, p2.y);
     }
   }
+}
+
+function flat(p: V): [number, number] {
+  return [p.x, p.y];
 }
 
 function lerpV(a: V, b: V, t: number): V {

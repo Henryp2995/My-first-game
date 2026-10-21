@@ -17,13 +17,14 @@ npm install        # install all workspaces
 npm run dev        # start the game at http://localhost:5173
 ```
 
-Open **http://localhost:5173** and choose **PLAYER VS CPU**. Character select has three steps:
+Open **http://localhost:5173** and choose **PLAYER VS CPU**:
 
-1. Pick **your** fighter (A / D, then F).
-2. Pick the **CPU's** fighter.
+1. Pick **your** fighter from all seven (A / D, then F).
+2. Pick the **CPU's** fighter from the same roster. Mirror matches are allowed, and the CPU wears an alternate costume.
 3. Pick the **CPU difficulty**: Easy, Normal, Hard or Expert.
+4. Pick a **stage**: Skyfall Arena, Corneria or Final Destination. Then press **FIGHT!**
 
-G goes back a step, Esc returns to the menu, and the mouse works on every step.
+G goes back a step, Esc returns to the menu, and the mouse works on every screen. After a match you can **Rematch** (same fighters, difficulty and stage) or go back to **Character Select**.
 
 Other commands:
 
@@ -35,7 +36,7 @@ Other commands:
 | `npm run build` | Production build → `apps/client/dist/` |
 | `npm run preview` | Serve the production build locally |
 | `npm run check` | typecheck + test + build |
-| `npm run sim` | Run a complete CPU-vs-CPU match headlessly in Node (no browser). Optional args: `npm run sim -- luigi sheik easy expert` |
+| `npm run sim` | Run a complete CPU-vs-CPU match headlessly in Node (no browser). Optional args: `npm run sim -- goku batman hard expert corneria` |
 
 Dev tool: open `http://localhost:5173/?gallery` to see every fighter in every pose, which helps with art work.
 
@@ -87,6 +88,8 @@ To keep it fair, every CPU caps how many quick attacks it chains into a stunned 
 
 ## Fighters
 
+Seven fighters. All of them are available to both you and the CPU.
+
 | | Mr. Game & Watch | Luigi | Sheik |
 |---|---|---|---|
 | Speed | High | Medium | Very High |
@@ -99,7 +102,36 @@ To keep it fair, every CPU caps how many quick attacks it chains into a stunned 
 | Special | Judge (random 1–9) | Green Rocket (charge, misfire chance) | Vanish (directional teleport + burst) |
 | Aerial | Key Drop (plunges down, spikes) | Down Kick (spike) | Diagonal Kick |
 
+| | Spider-Man | Batman | Naruto | Goku |
+|---|---|---|---|---|
+| Identity | Aerial mobility, web control | Heavyweight tactician | Fast close-range combos | Strong strikes, energy attacks |
+| Weight | Light (85) | Heavy (125) | Medium (95) | Medium-heavy (108) |
+| Movement | Best air speed and double jump | Slow, short jumps | Fast runner | Medium-high speed |
+| Light | Web-Slinger Jabs (2+2+3%) | Martial Arts Combo (3+4%) | Taijutsu Barrage (2+1+1+3%) | Rapid Punches (2+2+3%) |
+| Heavy | Spinning Spider Kick (11%, both sides) | Cape Strike (15%) | Whirlwind Kick (12%, both sides) | Charged Strike (14%; hold to charge, up to 20%) |
+| Special | **Web Shot**: a projectile that restrains for ~0.6 s. In the air, special + ↑ **web-zips** upward | **Batarang**: a boomerang that flies out and returns | **Rasengan**: a shadow clone forms it, then it dashes in, grinds 4 hits, and blasts (14%) | **Kamehameha**: hold to charge (10–19%), a piercing beam, 4 s cooldown |
+| Aerial | Web-Dive Kick (spike) | Cape Dive (spike) | Ninja Dive Strike (spike) | Energy Kick (spike) |
+
 When you and the CPU pick the same fighter, the CPU wears an alternate costume.
+
+## Stages
+
+| Stage | Layout |
+|---|---|
+| **Skyfall Arena** | Floating island with two soft platforms (the original stage) |
+| **Corneria** | A long starship over a city. The deck steps down at the nose and up at the rear deck; there's a soft platform on a sensor mast and one on the tail fin. No hazards. |
+| **Final Destination** | One wide, flat, symmetrical platform in deep space. No platforms, no hazards. |
+
+Stages are pure data (`packages/shared/src/stage.ts`). Each one defines:
+- its id, name and description
+- a render `theme`
+- its collision platforms (solid or one-way)
+- spawn and respawn points
+- its blast zone
+- camera bounds
+- a reserved `hazards` list
+
+Corneria's slopes are built from flat stepped surfaces: the steps are 40 px, and fighters walk up them automatically. Adding a stage means adding one `StageDef` (plus, optionally, its art in `render/backdrop.ts`).
 
 ## Project structure
 
@@ -108,7 +140,7 @@ arena-rush/
 ├── apps/
 │   ├── client/               Phaser 3 + Vite browser game
 │   │   └── src/
-│   │       ├── scenes/       Boot, Menu, Select, Battle, Results, Online (placeholder), Gallery (dev)
+│   │       ├── scenes/       Boot, Menu, Select, StageSelect, Battle, Results, Online (placeholder), Gallery (dev)
 │   │       ├── render/       Pose/skeleton animation, procedural fighter art, stage, VFX
 │   │       ├── input/        InputSource interface: keyboard (P1) and CPU sources
 │   │       ├── audio/        Web Audio synthesized SFX + mute
@@ -120,7 +152,7 @@ arena-rush/
 │       ├── src/
 │       │   ├── config.ts     Rules and balance knobs (stocks, timer, dodge, hitstun, …)
 │       │   ├── fighters.ts   Fighter stats and movesets as data
-│       │   ├── stage.ts      Skyfall Arena platforms, blast zones, spawns
+│       │   ├── stage.ts      Data-driven stages (Skyfall, Corneria, Final Destination) + geometry helpers
 │       │   ├── combat.ts     Knockback, hitstun, hitstop, hit/hurt boxes
 │       │   ├── match.ts      The 60 Hz simulation: stepMatch(state, inputs) → events
 │       │   ├── input.ts      InputFrame + compact network encoding
@@ -134,7 +166,15 @@ arena-rush/
 
 - **The simulation is deterministic and has no knowledge of rendering.** `stepMatch(state, inputs)` advances the match by one 1/60 s frame and returns events such as `hit`, `ko`, `jump` and `matchEnd`. Its only input is one `InputFrame` (button states) per player, and all randomness (Judge, rocket misfires) comes from a seeded RNG stored in the state. Given the same seed and the same inputs, it always produces the same match, which a test verifies.
 - **Rendering only reads.** The client drives the sim with a fixed-timestep accumulator and draws `MatchState`. Effects, sounds and camera shake react to the events. Fighters are drawn from a pose/skeleton system (`render/pose.ts` → `render/art.ts`), so real sprites can replace `drawFighter` later without touching gameplay.
-- **Fighters are data.** Every move is a `MoveDef` with startup/active/recovery frames, hitboxes (damage, base knockback, growth, angle), cooldown, landing lag and an optional behavior (`judge`, `rocket`, `vanish`). One combat engine runs all three fighters. To rebalance, edit `packages/shared/src/fighters.ts` and `config.ts`.
+- **Fighters are data.** Every move is a `MoveDef` with:
+  - startup, active and recovery frames
+  - hitboxes (damage, base knockback, growth, angle, an optional fixed `stunFrames`/`restrain`)
+  - cooldown and landing lag
+  - an optional `charge`
+  - an optional behavior: `judge`, `rocket`, `vanish`, or `projectile` (with `returnAfter` for boomerangs, `piercing` for beams, and `airUpZip` for the web-zip)
+
+  One combat engine runs all seven fighters. To rebalance, edit `packages/shared/src/fighters.ts` and `config.ts`.
+- **Projectiles live in the shared sim.** `MatchState.projectiles` is plain, serializable data. Projectiles use the same hurtbox overlap test, intangibility rules, knockback, hitstun and combo logic as melee hitboxes. They never hit their owner, they hit each target at most once, and webs and batarangs break on solid ground.
 - **Every fighter is driven by an `InputSource`.** `MatchSetup.players` is a list of slots: `{ fighter, control: 'human' }` or `{ fighter, control: 'cpu', difficulty }`. The battle scene creates a `KeyboardInputSource` (P1 keys) or a `CpuInputSource` for each slot. The simulation itself has no idea who is human.
 - **The client is ready for networking.** Clients only produce inputs, and `encodeInput` packs an input frame into 9 bits. In Phase 3 a `'remote'` slot type and a network `InputSource` get added, and the server runs the same `stepMatch` (and `CpuController`, for bots) inside a Colyseus room.
 
@@ -166,7 +206,7 @@ The lightweight G&W dies about 20–30% earlier. Light attacks never KO on their
 
 ## Testing
 
-`npm test` runs 97 Vitest tests against the shared simulation. They cover:
+`npm test` runs 140 Vitest tests against the shared simulation. They cover:
 
 - movement, acceleration, traction differences, gravity and landing
 - one-way platforms (jumping through and dropping through)
@@ -181,6 +221,7 @@ The lightweight G&W dies about 20–30% earlier. Light attacks never KO on their
 - winner detection (by stocks, on time by stocks and then damage, draws)
 - the countdown, determinism, and input encoding
 - combat physics: smooth knockback, weight, launch angles (mirrored when facing left, auto-direction, spikes), momentum decay under gravity, hitstun scaling, the hitstun lockout and recovery, landing cap, combo decay against perfect jab-mashing, hitstop ranges and timing, air control, fast fall, one air dodge per airtime, no jump refresh from walls, hitbox windows, single-hit registration, trades, recovery-frame cutoff, invulnerability, aerial tracking, all four blast zones, respawn
+- the crossover expansion: the seven-fighter roster and identities, each new special (web restrain, web-zip, batarang return, Rasengan multi-hit, Kamehameha charge/pierce/cooldown, charged strike), projectile rules (intangibility, ground, blast zone), geometry, spawns, respawns, landing and blast zones on all three stages, walking Corneria's steps both ways, and the CPU navigating, attacking and recovering with every fighter on every stage
 - the CPU: produces only InputFrames, approaches, releases buttons between presses, damages a player at every difficulty, each difficulty beats the one below, recovers to the stage for every fighter, finishes full matches, caps jab strings, aims Vanish through its startup, uses the uppercut to recover, respects the air-dodge limit, and steers toward the stage during hitstun
 
 ## Roadmap
@@ -192,6 +233,8 @@ The lightweight G&W dies about 20–30% earlier. Light attacks never KO on their
 ## Known limitations (MVP)
 
 - Local play is one human vs one CPU. The sim supports up to four fighters, and online play will use them.
+- Stages have no hazards yet (the `hazards` field is reserved). Corneria approximates slopes with steps.
+- CPU-vs-CPU win rates on Hard: the four new fighters sit at about 42–57%. Among the originals, Sheik (~90%) and Mr. Game & Watch (~10%) are outliers. That spread predates the expansion; I left the original movesets untouched and reported it instead.
 - There is no ledge-grab state. Recovering close to the lip snaps you onto the stage instead.
 - There is no shielding or grabbing; dodging is the only defensive option.
 - There is no gamepad support yet.

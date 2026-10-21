@@ -5,6 +5,7 @@ import { GAME_HEIGHT, GAME_WIDTH } from './theme';
 import { BootScene } from './scenes/BootScene';
 import { MenuScene } from './scenes/MenuScene';
 import { SelectScene } from './scenes/SelectScene';
+import { StageSelectScene } from './scenes/StageSelectScene';
 import { BattleScene } from './scenes/BattleScene';
 import { ResultsScene } from './scenes/ResultsScene';
 import { OnlineScene } from './scenes/OnlineScene';
@@ -29,7 +30,7 @@ const game = new Phaser.Game({
   fps: { target: 60 },
   scene: new URLSearchParams(location.search).has('gallery')
     ? [GalleryScene]
-    : [BootScene, MenuScene, SelectScene, BattleScene, ResultsScene, OnlineScene],
+    : [BootScene, MenuScene, SelectScene, StageSelectScene, BattleScene, ResultsScene, OnlineScene],
 });
 
 // Exposed for debugging in the browser console.

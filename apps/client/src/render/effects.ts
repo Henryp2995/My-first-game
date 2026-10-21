@@ -1,7 +1,10 @@
 import Phaser from 'phaser';
 
 interface Particle {
-  kind: 'spark' | 'ring' | 'puff' | 'flash' | 'beam' | 'star' | 'confetti' | 'streak';
+  kind: 'spark' | 'ring' | 'puff' | 'flash' | 'beam' | 'star' | 'confetti' | 'streak' | 'line';
+  /** End point for 'line' particles. */
+  x2?: number;
+  y2?: number;
   x: number;
   y: number;
   vx: number;
@@ -68,6 +71,12 @@ export class Effects {
         });
       }
     }
+  }
+
+  /** A web strand from (x, y) to (x2, y2) that fades out (Spider-Man's web-zip). */
+  webLine(x: number, y: number, x2: number, y2: number): void {
+    this.add({ kind: 'line', x, y, x2, y2, life: 16, maxLife: 16, color: 0xffffff });
+    this.add({ kind: 'ring', x: x2, y: y2, size: 4, life: 12, maxLife: 12, color: 0xffffff });
   }
 
   /** Speed line trailing a launched fighter, pointing back along its flight path. */
@@ -209,6 +218,10 @@ export class Effects {
           g.fillTriangle(p.x - sa * w, p.y + ca * w, p.x + sa * w, p.y - ca * w, ex, ey);
           break;
         }
+        case 'line':
+          g.lineStyle(2.5, p.color, t);
+          g.lineBetween(p.x, p.y, p.x2 ?? p.x, p.y2 ?? p.y);
+          break;
         case 'streak': {
           g.lineStyle(4 * t + 1, p.color, t * 0.8);
           g.lineBetween(p.x, p.y, p.x - Math.cos(p.angle) * p.size, p.y - Math.sin(p.angle) * p.size);

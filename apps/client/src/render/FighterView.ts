@@ -3,26 +3,36 @@ import {
   FIGHTERS, currentMove, hurtboxRect, activeHitboxes, hitboxRect,
   type FighterState, type GameEvent,
 } from '@arena-rush/shared';
+import { AnimationController, type AnimFrame } from '../anim/controller';
 import { drawFighter } from './art';
-import { computePose } from './pose';
+import { createCharacterRenderer, type CharacterRenderer } from './characters';
 import { FONT_DISPLAY } from '../theme';
 
-/** Visual representation of one fighter. Reads FighterState; never mutates it. */
+/** Swing-trail colors: blades glow in their own color; everything else leaves a white smear. */
+const TRAIL_COLORS: Partial<Record<string, number>> = { gundam: 0xff5fd2, vader: 0xff2a2a, goku: 0xffe066, naruto: 0x9ad8ff };
+
+/**
+ * Visual representation of one fighter. An AnimationController turns combat state into animation
+ * frames; a CharacterRenderer (procedural art or sprites) draws them. Reads FighterState only.
+ */
 export class FighterView {
-  /** Drawn behind the fighter: Naruto's shadow clone (visual only — never deals damage). */
+  /** Shadows, respawn halo and Naruto's shadow clone (visual only — never deals damage). */
+  readonly backG: Phaser.GameObjects.Graphics;
+  /** Translucent layer for the shadow clone. */
   readonly cloneG: Phaser.GameObjects.Graphics;
-  readonly g: Phaser.GameObjects.Graphics;
-  /** Drawn on top: energy orbs, auras, webs. */
+  readonly character: CharacterRenderer;
+  /** Drawn on top: swing trails, energy orbs, auras, webs, debug boxes. */
   readonly fxG: Phaser.GameObjects.Graphics;
   readonly label: Phaser.GameObjects.Text;
   readonly judgeText: Phaser.GameObjects.Text;
+  readonly anim: AnimationController;
+  private frame: AnimFrame | null = null;
   private flash = 0;
-  private flipT = -1;
-  private tumble = false;
   private clock = 0;
   private shakeFrames = 0;
   private judgeShow = 0;
   private judgeValue = 0;
+  private trail: { x: number; y: number }[] = [];
 
   /**
    * @param tag text above the fighter ("P1", "CPU")
@@ -31,13 +41,16 @@ export class FighterView {
   constructor(
     scene: Phaser.Scene,
     private readonly playerIndex: number,
+    private readonly fighter: FighterState['fighter'],
     tag: string,
     private readonly color: number,
     colorCss: string,
     private readonly alt = false,
   ) {
+    this.anim = new AnimationController(fighter, playerIndex);
+    this.backG = scene.add.graphics();
     this.cloneG = scene.add.graphics();
-    this.g = scene.add.graphics();
+    this.character = createCharacterRenderer(scene, fighter, alt);
     this.fxG = scene.add.graphics();
     this.label = scene.add.text(0, 0, tag, {
       fontFamily: FONT_DISPLAY,
@@ -54,33 +67,139 @@ export class FighterView {
   }
 
   get objects(): Phaser.GameObjects.GameObject[] {
-    return [this.cloneG, this.g, this.fxG, this.label, this.judgeText];
+    return [this.backG, this.cloneG, ...this.character.objects, this.fxG, this.label, this.judgeText];
+  }
+
+  /** The current animation state (for debugging and tests). */
+  get animState(): AnimFrame['state'] | null {
+    return this.frame?.state ?? null;
   }
 
   onEvent(e: GameEvent): void {
+    this.anim.onEvent(e);
     if (e.type === 'hit' && e.victim === this.playerIndex) {
       this.flash = 8;
       this.shakeFrames = 10;
-      this.tumble = e.launchSpeed > 1100;
-    } else if (e.type === 'jump' && e.id === this.playerIndex && e.double) {
-      this.flipT = 0;
     } else if (e.type === 'judge' && e.id === this.playerIndex) {
       this.judgeValue = e.value;
       this.judgeShow = 60;
-    } else if (e.type === 'respawn' && e.id === this.playerIndex) {
-      this.tumble = false;
     }
   }
 
-  /** Advance per-frame visual timers (called once per sim frame). */
-  tick(): void {
+  /** Advance animation and visual timers (once per 60 Hz sim frame). */
+  tick(f: FighterState): void {
     this.clock++;
     if (this.flash > 0) this.flash--;
     if (this.shakeFrames > 0) this.shakeFrames--;
     if (this.judgeShow > 0) this.judgeShow--;
-    if (this.flipT >= 0) {
-      this.flipT += 1 / 22;
-      if (this.flipT >= 1) this.flipT = -1;
+    this.frame = this.anim.update(f);
+  }
+
+  draw(f: FighterState, debug = false): void {
+    const bg = this.backG;
+    const fx = this.fxG;
+    bg.clear();
+    fx.clear();
+    this.cloneG.clear();
+    const frame = this.frame;
+    if (!frame) {
+      this.character.hide();
+      this.label.setVisible(false);
+      this.judgeText.setVisible(false);
+      this.trail = [];
+      return;
+    }
+
+    // KO: a final tumble where the fighter left the stage (drawn at the blast-zone edge).
+    if (frame.ko) {
+      this.label.setVisible(false);
+      this.judgeText.setVisible(false);
+      this.character.draw(frame, frame.ko.x, frame.ko.y, f.facing, { scale: 1 - frame.ko.t * 0.6, alpha: 1 - frame.ko.t });
+      return;
+    }
+
+    this.label.setVisible(true);
+    const def = FIGHTERS[f.fighter];
+    const move = currentMove(f);
+    let alpha = frame.pose.alpha;
+    if (f.invuln > 0 && Math.floor(this.clock / 4) % 2 === 0) alpha *= 0.45;
+    let x = f.x;
+    const y = f.y;
+    if (f.hitstop > 0 && this.shakeFrames > 0) x += (this.clock % 2 === 0 ? 1 : -1) * 3;
+
+    // Respawn platform halo.
+    if (f.action === 'respawning') {
+      bg.fillStyle(this.color, 0.35);
+      bg.fillEllipse(x, y + 6, 90, 22);
+      bg.lineStyle(3, 0xffffff, 0.9);
+      bg.strokeEllipse(x, y + 6, 90, 22);
+      bg.fillStyle(0xffffff, 0.12);
+      bg.fillTriangle(x - 45, y + 6, x + 45, y + 6, x, y + 120);
+    }
+    // Contact shadow (squashes with the body).
+    if (f.grounded) {
+      bg.fillStyle(0x000000, 0.2);
+      bg.fillEllipse(x, y + 2, def.stats.width * 1.6 * frame.squashX, 9);
+    }
+    // Naruto's Rasengan: a shadow clone appears behind him while the orb forms (visual only).
+    if (move?.id === 'naruto-rasengan' && f.action === 'attack' && f.actionFrame < move.startup + 6) {
+      const fade = f.actionFrame < move.startup ? Math.min(1, f.actionFrame / 5) : 1 - (f.actionFrame - move.startup) / 6;
+      this.cloneG.setAlpha(0.45 * fade);
+      drawFighter(this.cloneG, f.fighter, { ...frame.pose, flip: false }, x - f.facing * 30, y, f.facing, 1, false, this.alt, frame);
+    }
+
+    const res = this.character.draw(frame, x, y, f.facing, {
+      flash: this.flash > 0 && this.flash % 4 < 2,
+      alpha,
+    });
+
+    this.drawTrail(frame, res.weaponTip ?? res.handF);
+    this.drawMoveEffects(f, res.handF, x, y);
+
+    // Player tag arrow
+    const tagY = res.top - 8;
+    fx.fillStyle(this.color, 1);
+    fx.fillTriangle(x - 7, tagY - 8, x + 7, tagY - 8, x, tagY);
+    this.label.setPosition(x, tagY - 9);
+    this.label.setAlpha(alpha < 0.2 ? 0.4 : 1);
+
+    // Judge sign number
+    if (res.propAnchor && f.judgeValue > 0) {
+      this.judgeText.setText(String(f.judgeValue)).setPosition(res.propAnchor.x, res.propAnchor.y).setVisible(true);
+    } else if (this.judgeShow > 0 && this.judgeValue > 0) {
+      this.judgeText.setText(String(this.judgeValue)).setPosition(x, tagY - 36).setVisible(this.judgeShow > 30);
+    } else {
+      this.judgeText.setVisible(false);
+    }
+
+    if (debug) {
+      const hb = hurtboxRect(f, def.stats);
+      fx.lineStyle(1.5, 0xffff00, 0.9);
+      fx.strokeRect(hb.x, hb.y, hb.w, hb.h);
+      for (const box of activeHitboxes(f)) {
+        const r = hitboxRect(f, box);
+        fx.fillStyle(0xff0000, 0.35);
+        fx.fillRect(r.x, r.y, r.w, r.h);
+      }
+    }
+  }
+
+  /** Smear trail behind the striking hand / blade during an attack's active frames. */
+  private drawTrail(frame: AnimFrame, tip: { x: number; y: number }): void {
+    const swinging = frame.attackPhase === 'active' && ['light', 'heavy', 'aerial'].includes(frame.state);
+    if (swinging) {
+      this.trail.push({ ...tip });
+      if (this.trail.length > 7) this.trail.shift();
+    } else if (this.trail.length) {
+      this.trail.shift();
+    }
+    if (this.trail.length < 2) return;
+    const color = TRAIL_COLORS[this.fighter] ?? 0xffffff;
+    const heavy = frame.state === 'heavy';
+    for (let i = 1; i < this.trail.length; i++) {
+      const k = i / this.trail.length;
+      this.fxG.lineStyle((heavy ? 12 : 6) * k, color, 0.5 * k);
+      this.fxG.lineBetween(this.trail[i - 1].x, this.trail[i - 1].y, this.trail[i].x, this.trail[i].y);
     }
   }
 
@@ -150,102 +269,6 @@ export class FighterView {
         fx.beginPath();
         fx.arc(hand.x, hand.y, r * 0.75, a, a + 1.6);
         fx.strokePath();
-      }
-    }
-  }
-
-  draw(f: FighterState, debug = false): void {
-    const g = this.g;
-    g.clear();
-    this.cloneG.clear();
-    this.fxG.clear();
-    const hidden = f.action === 'dead' || f.eliminated;
-    this.label.setVisible(!hidden);
-    if (hidden) {
-      this.judgeText.setVisible(false);
-      return;
-    }
-    if (f.action !== 'air') this.flipT = -1;
-    if (f.action !== 'hitstun') this.tumble = false;
-
-    const def = FIGHTERS[f.fighter];
-    const move = currentMove(f);
-    const pose = computePose({
-      fighter: f.fighter,
-      action: f.action,
-      move,
-      actionFrame: f.actionFrame,
-      grounded: f.grounded,
-      vx: f.vx,
-      vy: f.vy + f.kby,
-      runSpeed: def.stats.runSpeed,
-      t: this.clock,
-      flip: this.flipT,
-      tumble: this.tumble,
-      charge: move?.behavior?.type === 'rocket' ? f.charge / move.behavior.maxChargeFrames : 0,
-      rocketLaunched: f.rocketLaunched,
-    });
-
-    let alpha = pose.alpha;
-    if (f.invuln > 0 && Math.floor(this.clock / 4) % 2 === 0) alpha *= 0.45;
-    let x = f.x;
-    const y = f.y;
-    if (f.hitstop > 0 && this.shakeFrames > 0) x += (this.clock % 2 === 0 ? 1 : -1) * 3;
-
-    const color = this.color;
-
-    // Respawn platform halo.
-    if (f.action === 'respawning') {
-      g.fillStyle(color, 0.35);
-      g.fillEllipse(x, y + 6, 90, 22);
-      g.lineStyle(3, 0xffffff, 0.9);
-      g.strokeEllipse(x, y + 6, 90, 22);
-      g.fillStyle(0xffffff, 0.12);
-      g.fillTriangle(x - 45, y + 6, x + 45, y + 6, x, y + 120);
-    }
-
-    // Player color ground shadow ring.
-    if (f.grounded) {
-      g.fillStyle(0x000000, 0.18);
-      g.fillEllipse(x, y + 2, def.stats.width * 1.5, 8);
-    }
-
-    // Naruto's Rasengan: a shadow clone appears behind him while the orb forms.
-    if (move?.id === 'naruto-rasengan' && f.action === 'attack' && f.actionFrame < move.startup + 6) {
-      const fade = f.actionFrame < move.startup ? Math.min(1, f.actionFrame / 5) : 1 - (f.actionFrame - move.startup) / 6;
-      this.cloneG.setAlpha(0.45 * fade);
-      drawFighter(this.cloneG, f.fighter, { ...pose, flip: false }, x - f.facing * 30, y, f.facing, 1, false, this.alt);
-    }
-
-    g.setAlpha(alpha);
-    const res = drawFighter(g, f.fighter, pose, x, y, f.facing, 1, this.flash > 0 && this.flash % 4 < 2, this.alt);
-    this.drawMoveEffects(f, res.handF, x, y);
-
-    // Player tag arrow
-    const tagY = res.top - 8;
-    g.fillStyle(color, 1);
-    g.fillTriangle(x - 7, tagY - 8, x + 7, tagY - 8, x, tagY);
-    this.label.setPosition(x, tagY - 9);
-    this.label.setAlpha(alpha < 0.2 ? 0.4 : 1);
-
-    // Judge sign number
-    if (res.propAnchor && f.judgeValue > 0) {
-      this.judgeText.setText(String(f.judgeValue)).setPosition(res.propAnchor.x, res.propAnchor.y).setVisible(true);
-    } else if (this.judgeShow > 0 && this.judgeValue > 0) {
-      this.judgeText.setText(String(this.judgeValue)).setPosition(x, tagY - 36).setVisible(this.judgeShow > 30);
-    } else {
-      this.judgeText.setVisible(false);
-    }
-
-    if (debug) {
-      g.setAlpha(1);
-      const hb = hurtboxRect(f, def.stats);
-      g.lineStyle(1.5, 0xffff00, 0.9);
-      g.strokeRect(hb.x, hb.y, hb.w, hb.h);
-      for (const box of activeHitboxes(f)) {
-        const r = hitboxRect(f, box);
-        g.fillStyle(0xff0000, 0.35);
-        g.fillRect(r.x, r.y, r.w, r.h);
       }
     }
   }

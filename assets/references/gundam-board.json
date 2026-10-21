@@ -1,0 +1,17 @@
+{
+  "fighter": "gundam",
+  "source": "gundam-reference.png",
+  "note": "Panel rectangles on the 1536x1024 'Arena Rush: Gundam RX-78 Showcase' board. 'ignore' rects blank out panel labels that overlap tall frames. Hyper Bazooka and Shield Bash panels are not part of Gundam's in-game moveset and are skipped.",
+  "panels": [
+    { "name": "idle",  "rect": [480, 30, 362, 90],  "states": ["idle", "idle", "idle", "idle", "idle"] },
+    { "name": "run",   "rect": [860, 30, 328, 90],  "states": ["run", "run", "run", "run"] },
+    { "name": "jump",  "rect": [1206, 12, 316, 108], "ignore": [[1204, 10, 140, 21]], "states": ["jumpStart", "rise", "rise", "fall"] },
+    { "name": "light", "rect": [480, 150, 410, 106], "ignore": [[476, 134, 180, 23]], "states": ["light", "light", "light", "light", "light"] },
+    { "name": "heavy", "rect": [910, 140, 314, 116], "ignore": [[908, 134, 136, 23]], "states": ["heavy", "heavy", "heavy"] },
+    { "name": "air",   "rect": [1240, 146, 284, 110], "ignore": [[1238, 134, 112, 23]], "states": ["aerial", "aerial", "aerial"] },
+    { "name": "rifle", "rect": [480, 288, 616, 96], "frames": [[4, 92], [96, 186], [186, 292]], "states": ["special", "special", "special"] },
+    { "name": "dodge", "rect": [804, 418, 240, 94], "states": ["dodge", "dodge", "dodge"] },
+    { "name": "hit",   "rect": [1058, 418, 232, 94], "states": ["hit", "knockback"] },
+    { "name": "ko",    "rect": [1304, 418, 220, 94], "frames": [[66, 218]], "states": ["ko"] }
+  ]
+}

@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { preloadCharacterArt } from '../render/characters';
 import { displayText } from '../ui/widgets';
 import { GAME_HEIGHT, GAME_WIDTH } from '../theme';
 
@@ -6,6 +7,11 @@ import { GAME_HEIGHT, GAME_WIDTH } from '../theme';
 export class BootScene extends Phaser.Scene {
   constructor() {
     super('Boot');
+  }
+
+  preload(): void {
+    // Character sprite atlases registered in the manifest (fighters without one use procedural art).
+    preloadCharacterArt(this);
   }
 
   create(): void {

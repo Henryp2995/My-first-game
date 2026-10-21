@@ -1,15 +1,16 @@
 import Phaser from 'phaser';
 import { FIGHTER_ORDER } from '@arena-rush/shared';
 import { sound } from '../audio/sound';
-import { drawFighter } from '../render/art';
+import { FigureCache } from '../render/characters';
 import { Backdrop } from '../render/backdrop';
-import { computePose } from '../render/pose';
+import { previewFrame } from '../anim/controller';
 import { FONT_BODY, GAME_HEIGHT, GAME_WIDTH, UI } from '../theme';
 import { bodyText, displayText, fadeTo, installGlobalKeys, Menu, panel } from '../ui/widgets';
 
 export class MenuScene extends Phaser.Scene {
   private backdrop!: Backdrop;
   private lineup!: Phaser.GameObjects.Graphics;
+  private figures!: FigureCache;
   private menu!: Menu;
   private overlay: Phaser.GameObjects.GameObject[] = [];
   private t = 0;
@@ -49,6 +50,7 @@ export class MenuScene extends Phaser.Scene {
     ]);
 
     this.lineup = this.add.graphics();
+    this.figures = new FigureCache(this);
 
     bodyText(this, GAME_WIDTH / 2, GAME_HEIGHT - 16,
       'Unofficial, noncommercial fan project · Not affiliated with or endorsed by Nintendo · All art & audio procedurally generated',
@@ -118,13 +120,15 @@ export class MenuScene extends Phaser.Scene {
     g.fillRoundedRect(690, 530, 500, 7, 4);
     g.fillStyle(0x8a74e8, 1);
     g.fillRoundedRect(690, 548, 500, 30, 8);
-    FIGHTER_ORDER.forEach((id, i) => {
-      const x = 800 + i * 140;
-      const pose = computePose({
-        fighter: id, action: 'victory', move: null, actionFrame: 0, grounded: true, vx: 0, vy: 0,
-        runSpeed: 1, t: this.t + i * 40, flip: -1, tumble: false, charge: 0, rocketLaunched: false,
-      });
-      drawFighter(g, id, pose, x, 530, i === 2 ? -1 : 1, 2.0);
-    });
+    // Three fighters at a time, cycling through the whole roster.
+    const group = Math.floor(this.t / 240) % Math.ceil(FIGHTER_ORDER.length / 3);
+    const fade = Math.min(1, (this.t % 240) / 20, (240 - (this.t % 240)) / 20);
+    this.figures.begin();
+    for (let i = 0; i < 3; i++) {
+      const id = FIGHTER_ORDER[(group * 3 + i) % FIGHTER_ORDER.length];
+      const frame = previewFrame(id, 'victory', this.t + i * 40);
+      this.figures.draw(id, frame, 800 + i * 140, 530, i === 2 ? -1 : 1, 1.85, { alpha: fade });
+    }
+    this.figures.end();
   }
 }

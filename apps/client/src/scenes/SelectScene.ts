@@ -4,9 +4,10 @@ import {
   type CpuDifficulty, type FighterId,
 } from '@arena-rush/shared';
 import { sound } from '../audio/sound';
-import { drawFighter, FIGHTER_UI_COLOR, shade } from '../render/art';
+import { FIGHTER_UI_COLOR, shade } from '../render/art';
+import { FigureCache } from '../render/characters';
 import { Backdrop } from '../render/backdrop';
-import { computePose } from '../render/pose';
+import { previewFrame } from '../anim/controller';
 import { CPU_COLOR, CPU_CSS, FONT_BODY, GAME_HEIGHT, GAME_WIDTH, PLAYER_COLORS, PLAYER_CSS, UI } from '../theme';
 import { bodyText, displayText, fadeTo, installGlobalKeys, panel } from '../ui/widgets';
 import type { MatchSetup } from './types';
@@ -54,7 +55,6 @@ const KEYS = {
 };
 
 interface DetailPanel {
-  preview: Phaser.GameObjects.Graphics;
   name: Phaser.GameObjects.Text;
   tagline: Phaser.GameObjects.Text;
   bars: Phaser.GameObjects.Graphics;
@@ -69,7 +69,7 @@ export class SelectScene extends Phaser.Scene {
   private cpuIndex = 2;
   private difficulty = 1;
   private confirmedAt: [number, number] = [-999, -999];
-  private previews: Phaser.GameObjects.Graphics[] = [];
+  private figures!: FigureCache;
   private cursorGfx!: Phaser.GameObjects.Graphics;
   private pillGfx!: Phaser.GameObjects.Graphics;
   private pillText: Phaser.GameObjects.Text[] = [];
@@ -93,7 +93,7 @@ export class SelectScene extends Phaser.Scene {
     this.t = 0;
     this.step = 'player';
     this.leaving = false;
-    this.previews = [];
+    this.figures = new FigureCache(this);
     this.badges = [];
     this.pillText = [];
     this.details = [];
@@ -168,7 +168,6 @@ export class SelectScene extends Phaser.Scene {
       name.setFontSize(Number.parseInt(String(name.style.fontSize), 10) - 1);
     }
 
-    this.previews.push(this.add.graphics());
 
     const zone = this.add.zone(x, ROSTER_Y, CARD_W, CARD_H).setInteractive({ useHandCursor: true });
     zone.on('pointerdown', () => {
@@ -201,7 +200,6 @@ export class SelectScene extends Phaser.Scene {
     displayText(this, left + 46, PANEL_Y - PANEL_H / 2 + 34, who === 0 ? 'P1' : 'CPU', who === 0 ? 24 : 20,
       who === 0 ? PLAYER_CSS[0] : CPU_CSS, UI.inkCss, 5);
     bodyText(this, left + 140, PANEL_Y - PANEL_H / 2 + 34, who === 0 ? 'YOU' : 'COMPUTER', 11, who === 0 ? PLAYER_CSS[0] : CPU_CSS, '900');
-    const preview = this.add.graphics();
     const tx = left + 210;
     const name = this.add.text(tx, PANEL_Y - PANEL_H / 2 + 22, '', { fontFamily: '"Bungee", "Arial Black", sans-serif', fontSize: '26px', color: '#ffffff', stroke: UI.inkCss, strokeThickness: 5 });
     const tagline = this.add.text(tx, PANEL_Y - PANEL_H / 2 + 62, '', { fontFamily: FONT_BODY, fontSize: '14px', fontStyle: '700', color: UI.muted });
@@ -211,7 +209,7 @@ export class SelectScene extends Phaser.Scene {
     });
     const moves = this.add.text(tx, PANEL_Y + 62, '', { fontFamily: FONT_BODY, fontSize: '13px', fontStyle: '500', color: '#b9b4e6', wordWrap: { width: PANEL_W - 230 } });
     const status = this.add.text(tx, PANEL_Y + PANEL_H / 2 - 24, '', { fontFamily: FONT_BODY, fontSize: '14px', fontStyle: '900', color: UI.muted });
-    this.details.push({ preview, name, tagline, bars, moves, status });
+    this.details.push({ name, tagline, bars, moves, status });
   }
 
   private onKey(code: string): void {
@@ -333,24 +331,24 @@ export class SelectScene extends Phaser.Scene {
     const at = STEPS.indexOf(this.step);
 
     // Roster previews: a fighter strikes its victory pose right after being picked.
+    this.figures.begin();
     FIGHTER_ORDER.forEach((id, i) => {
-      const g = this.previews[i];
-      g.clear();
       const recent = (i === this.playerIndex && this.t - this.confirmedAt[0] < 90)
         || (i === this.cpuIndex && this.t - this.confirmedAt[1] < 90);
-      drawFighter(g, id, posed(id, recent ? 'victory' : 'preview', this.t + i * 30), cardX(i), ROSTER_Y - CARD_H / 2 + 146, 1, PREVIEW_SCALE);
+      const frame = posed(id, recent ? 'victory' : 'preview', this.t + i * 30);
+      this.figures.draw(id, frame, cardX(i), ROSTER_Y - CARD_H / 2 + 146, 1, PREVIEW_SCALE, { slot: 'card' });
     });
 
     // Detail panel previews
     ([0, 1] as const).forEach((who) => {
-      const g = this.details[who].preview;
-      g.clear();
       if (who === 1 && at < 1) return;
       const idx = who === 0 ? this.playerIndex : this.cpuIndex;
       const id = FIGHTER_ORDER[idx];
       const alt = who === 1 && this.playerIndex === this.cpuIndex;
-      drawFighter(g, id, posed(id, 'preview', this.t), PANEL_X[who] - PANEL_W / 2 + 99, PANEL_Y + PANEL_H / 2 - 30, 1, 1.75, false, alt);
+      const frame = posed(id, 'preview', this.t);
+      this.figures.draw(id, frame, PANEL_X[who] - PANEL_W / 2 + 99, PANEL_Y + PANEL_H / 2 - 30, 1, 1.75, { alt, slot: `panel${who}` });
     });
+    this.figures.end();
 
     // Cursors on the roster strip
     const g = this.cursorGfx;
@@ -382,10 +380,7 @@ export class SelectScene extends Phaser.Scene {
 }
 
 function posed(id: FighterId, action: 'victory' | 'preview', t: number) {
-  return computePose({
-    fighter: id, action, move: null, actionFrame: 0, grounded: true,
-    vx: 0, vy: 0, runSpeed: 1, t, flip: -1, tumble: false, charge: 0, rocketLaunched: false,
-  });
+  return previewFrame(id, action === 'victory' ? 'victory' : 'idle', t);
 }
 
 function wrap(i: number, n: number): number {

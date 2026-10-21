@@ -1,0 +1,190 @@
+{
+  "fighter": "goku",
+  "source": "goku-reference.png",
+  "note": "Panel rectangles on the 1536x1024 'Arena Rush: Goku Assets Showcase' board. Each panel holds frames left-to-right. 'states' maps each extracted frame (by order) to animation-state frame names.",
+  "panels": [
+    {
+      "name": "idle",
+      "rect": [
+        478,
+        28,
+        374,
+        90
+      ],
+      "states": [
+        "idle",
+        "idle",
+        "idle",
+        "idle",
+        "idle"
+      ]
+    },
+    {
+      "name": "run",
+      "rect": [
+        860,
+        28,
+        378,
+        90
+      ],
+      "states": [
+        "run",
+        "run",
+        "run",
+        "run",
+        "run"
+      ]
+    },
+    {
+      "name": "jump",
+      "rect": [
+        1246,
+        26,
+        284,
+        92
+      ],
+      "states": [
+        "jumpStart",
+        "rise",
+        "rise",
+        "fall"
+      ]
+    },
+    {
+      "name": "light",
+      "rect": [
+        478,
+        152,
+        406,
+        92
+      ],
+      "states": [
+        "light",
+        "light",
+        "light",
+        "light",
+        "light"
+      ]
+    },
+    {
+      "name": "heavy",
+      "rect": [
+        894,
+        152,
+        342,
+        92
+      ],
+      "states": [
+        "heavy",
+        "heavy",
+        "heavy",
+        "heavy"
+      ]
+    },
+    {
+      "name": "air",
+      "rect": [
+        1246,
+        152,
+        284,
+        92
+      ],
+      "states": [
+        "aerial",
+        "aerial",
+        "aerial"
+      ]
+    },
+    {
+      "name": "special",
+      "rect": [
+        478,
+        282,
+        732,
+        102
+      ],
+      "states": [
+        "special",
+        "special",
+        "special",
+        "special"
+      ],
+      "frames": [
+        [
+          6,
+          72
+        ],
+        [
+          98,
+          170
+        ],
+        [
+          224,
+          302
+        ],
+        [
+          324,
+          394
+        ]
+      ],
+      "removeGlow": true
+    },
+    {
+      "name": "hit",
+      "rect": [
+        1220,
+        282,
+        310,
+        102
+      ],
+      "states": [
+        "hit",
+        "hit",
+        "knockback"
+      ]
+    },
+    {
+      "name": "dodge",
+      "rect": [
+        478,
+        418,
+        340,
+        82
+      ],
+      "states": [
+        "dodge",
+        "dodge",
+        "dodge",
+        "dodge"
+      ]
+    },
+    {
+      "name": "landing",
+      "rect": [
+        828,
+        418,
+        340,
+        82
+      ],
+      "states": [
+        "land",
+        "land",
+        "land"
+      ]
+    },
+    {
+      "name": "ko",
+      "rect": [
+        1178,
+        418,
+        352,
+        82
+      ],
+      "states": [
+        "ko",
+        "ko",
+        "ko"
+      ]
+    }
+  ]
+}

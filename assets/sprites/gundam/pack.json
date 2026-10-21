@@ -1,0 +1,4 @@
+{
+  "note": "Body colors (RGB + tolerance) used to find Gundam's feet and torso for alignment; pink saber trails, blue thrusters and sparks are ignored.",
+  "bodyColors": [[236, 236, 242, 34], [205, 45, 45, 45], [45, 75, 170, 40], [120, 125, 140, 30]]
+}

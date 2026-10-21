@@ -1,51 +1,71 @@
 import Phaser from 'phaser';
-import { FIGHTERS, FIGHTER_ORDER, type FighterAction, type MoveSlot } from '@arena-rush/shared';
+import { FIGHTERS, FIGHTER_ORDER, type FighterId } from '@arena-rush/shared';
+import { sampleStateFrame } from '../anim/controller';
+import { ANIM_STATES, type AnimState } from '../anim/states';
 import { drawFighter } from '../render/art';
-import { computePose, type AnimInput } from '../render/pose';
 import { GAME_WIDTH } from '../theme';
 import { bodyText } from '../ui/widgets';
 
+const OVERVIEW: AnimState[] = ['idle', 'run', 'rise', 'hit', 'light', 'heavy', 'special', 'aerial', 'victory'];
 const ROW_H = Math.min(99, Math.floor(600 / FIGHTER_ORDER.length));
 const ROW_SCALE = ROW_H / 94;
 
-/** Dev tool (open with `?gallery`): every fighter in a range of poses, for art iteration. */
+/**
+ * Dev tool for art and animation review.
+ *   ?gallery            every fighter in key states
+ *   ?gallery=<fighter>  one fighter, large, in every animation state
+ * Attacks loop through their real move timing.
+ */
 export class GalleryScene extends Phaser.Scene {
   private g!: Phaser.GameObjects.Graphics;
   private t = 0;
+  private single: FighterId | null = null;
 
   constructor() {
     super('Gallery');
   }
 
   create(): void {
+    const param = new URLSearchParams(location.search).get('gallery');
+    this.single = param && param in FIGHTERS ? (param as FighterId) : null;
     this.cameras.main.setBackgroundColor('#b8a8f0');
     this.g = this.add.graphics();
-    const labels = ['idle', 'run', 'rise', 'hurt', 'light', 'heavy', 'special', 'aerial', 'victory'];
-    labels.forEach((l, i) => bodyText(this, 75 + i * 140, 14, l, 15, '#14112b', '900'));
+    if (this.single) {
+      bodyText(this, GAME_WIDTH / 2, 18, `${FIGHTERS[this.single].name} — every animation state`, 18, '#14112b', '900');
+      ANIM_STATES.forEach((state, i) => {
+        const { x, y } = this.cell(i);
+        bodyText(this, x, y + 18, state, 13, '#14112b', '900');
+      });
+    } else {
+      OVERVIEW.forEach((l, i) => bodyText(this, 75 + i * 140, 14, l, 15, '#14112b', '900'));
+    }
+  }
+
+  private cell(i: number) {
+    const perRow = 9;
+    return { x: 72 + (i % perRow) * 142, y: 300 + Math.floor(i / perRow) * 300 };
   }
 
   update(): void {
     this.t++;
     const g = this.g;
     g.clear();
+    if (this.single) {
+      const id = this.single;
+      ANIM_STATES.forEach((state, i) => {
+        const { x, y } = this.cell(i);
+        const frame = sampleStateFrame(id, state, this.t / 1.5);
+        g.lineStyle(1, 0x14112b, 0.25);
+        g.lineBetween(x - 60, y, x + 60, y);
+        drawFighter(g, id, { ...frame.pose, alpha: 1 }, x, y, 1, 1.6, false, false, frame);
+      });
+      return;
+    }
     FIGHTER_ORDER.forEach((id, row) => {
-      const def = FIGHTERS[id];
       const y = 125 + row * ROW_H;
-      const cells: { action: FighterAction | 'victory'; slot?: MoveSlot; vy?: number; grounded?: boolean; vx?: number }[] = [
-        { action: 'idle' }, { action: 'run', vx: def.stats.runSpeed }, { action: 'air', vy: -500, grounded: false },
-        { action: 'hitstun' }, { action: 'attack', slot: 'light' }, { action: 'attack', slot: 'heavy' },
-        { action: 'attack', slot: 'special' }, { action: 'attack', slot: 'aerial', grounded: false }, { action: 'victory' },
-      ];
-      cells.forEach((c, i) => {
-        const move = c.slot ? def.moves[c.slot] : null;
-        const frame = move ? Math.floor((this.t / 2) % (move.startup + move.active + move.recovery)) : 0;
-        const input: AnimInput = {
-          fighter: id, action: c.action as AnimInput['action'], move, actionFrame: frame, grounded: c.grounded ?? true,
-          vx: c.vx ?? 0, vy: c.vy ?? 0, runSpeed: def.stats.runSpeed, t: this.t, flip: -1, tumble: false,
-          charge: 0.5, rocketLaunched: move?.behavior?.type === 'rocket' ? frame >= move.startup : false,
-        };
-        const pose = computePose(input);
-        drawFighter(g, id, { ...pose, alpha: 1 }, 75 + i * 140, y, 1, ROW_SCALE);
+      OVERVIEW.forEach((state, i) => {
+        const frame = sampleStateFrame(id, state, this.t / 1.5);
+        drawFighter(g, id, { ...frame.pose, alpha: 1 }, 75 + i * 140, y, 1, ROW_SCALE, false, false, frame);
       });
     });
     g.lineStyle(1, 0x14112b, 0.3);

@@ -2,7 +2,7 @@
   "name": "arena-rush",
   "private": true,
   "version": "0.1.0",
-  "description": "Arena Rush — an unofficial, noncommercial 2D platform fighter fan project.",
+  "description": "Arena Rush \u2014 an unofficial, noncommercial 2D platform fighter fan project.",
   "workspaces": [
     "packages/*",
     "apps/*"
@@ -15,9 +15,12 @@
     "test:watch": "vitest",
     "typecheck": "tsc -p packages/shared && tsc -p apps/client && tsc -p apps/server",
     "check": "npm run typecheck && npm run test && npm run build",
-    "sim": "npm run sim -w @arena-rush/server"
+    "sim": "npm run sim -w @arena-rush/server",
+    "sprites:extract": "node tools/sprites/extract-board.mjs",
+    "sprites:pack": "node tools/sprites/pack.mjs"
   },
   "devDependencies": {
+    "pngjs": "^7.0.0",
     "typescript": "^5.6.3",
     "vitest": "^2.1.8"
   }

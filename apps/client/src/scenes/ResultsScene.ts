@@ -1,10 +1,11 @@
 import Phaser from 'phaser';
 import { FIGHTERS, getStage } from '@arena-rush/shared';
 import { sound } from '../audio/sound';
-import { drawFighter, shade } from '../render/art';
+import { shade } from '../render/art';
+import { FigureCache } from '../render/characters';
 import { Backdrop } from '../render/backdrop';
 import { Effects } from '../render/effects';
-import { computePose } from '../render/pose';
+import { previewFrame } from '../anim/controller';
 import { FONT_BODY, GAME_HEIGHT, GAME_WIDTH, UI } from '../theme';
 import { bodyText, displayText, fadeTo, installGlobalKeys, Menu, panel } from '../ui/widgets';
 import { isAltCostume, slotColor, slotCss, slotDescription, type MatchSummary } from './types';
@@ -12,7 +13,7 @@ import { isAltCostume, slotColor, slotCss, slotDescription, type MatchSummary } 
 export class ResultsScene extends Phaser.Scene {
   private summary!: MatchSummary;
   private backdrop!: Backdrop;
-  private hero!: Phaser.GameObjects.Graphics;
+  private figures!: FigureCache;
   private effects!: Effects;
   private t = 0;
 
@@ -53,7 +54,7 @@ export class ResultsScene extends Phaser.Scene {
     ped.fillStyle(color, 1);
     ped.fillRoundedRect(170, 508, 300, 22, 10);
 
-    this.hero = this.add.graphics();
+    this.figures = new FigureCache(this);
     this.effects = new Effects(this);
 
     if (winner === null) {
@@ -108,19 +109,16 @@ export class ResultsScene extends Phaser.Scene {
     this.t++;
     this.backdrop.update();
     const s = this.summary;
-    const g = this.hero;
-    g.clear();
+    this.figures.begin();
     const ids = s.winner === null ? s.ranking : [s.winner];
     ids.forEach((pid, i) => {
       const fighter = s.setup.players[pid].fighter;
       const x = ids.length === 1 ? 320 : 320 + (i - (ids.length - 1) / 2) * 120;
-      const pose = computePose({
-        fighter, action: s.winner === null ? 'preview' : 'victory', move: null, actionFrame: 0, grounded: true,
-        vx: 0, vy: 0, runSpeed: 1, t: this.t, flip: -1, tumble: false, charge: 0, rocketLaunched: false,
-      });
+      const frame = previewFrame(fighter, s.winner === null ? 'idle' : 'victory', this.t);
       const alt = isAltCostume(s.setup, pid);
-      drawFighter(g, fighter, pose, x, 508, 1, ids.length === 1 ? 2.6 : 2.0, false, alt);
+      this.figures.draw(fighter, frame, x, 508, 1, ids.length === 1 ? 2.6 : 2.0, { alt, slot: String(pid) });
     });
+    this.figures.end();
     if (s.winner !== null && this.t % 3 === 0 && this.t < 600) {
       this.effects.confetti(0, -20, GAME_WIDTH, [slotColor(s.setup, s.winner), 0xffd23f, 0xffffff, 0xff6fb5]);
     }

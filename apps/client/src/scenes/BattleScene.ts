@@ -7,12 +7,13 @@ import { sound } from '../audio/sound';
 import { CpuInputSource } from '../input/cpu';
 import { KeyboardInputSource, P1_KEYS } from '../input/keyboard';
 import type { InputSource } from '../input/source';
-import { drawFighter, FIGHTER_UI_COLOR, shade } from '../render/art';
+import { FIGHTER_UI_COLOR, shade } from '../render/art';
 import { Backdrop, drawStage } from '../render/backdrop';
 import { Effects } from '../render/effects';
+import { FigureCache } from '../render/characters';
 import { FighterView } from '../render/FighterView';
 import { ProjectileView } from '../render/projectiles';
-import { computePose } from '../render/pose';
+import { previewFrame } from '../anim/controller';
 import { damageColor, FONT_BODY, GAME_HEIGHT, GAME_WIDTH, UI } from '../theme';
 import { bodyText, displayText, installGlobalKeys, panel } from '../ui/widgets';
 import { isAltCostume, slotColor, slotCss, slotDescription, slotLabel, type MatchSetup, type MatchSummary } from './types';
@@ -23,7 +24,7 @@ interface HudCard {
   container: Phaser.GameObjects.Container;
   damage: Phaser.GameObjects.Text;
   stocks: Phaser.GameObjects.Graphics;
-  portrait: Phaser.GameObjects.Graphics;
+
   shownDamage: number;
   shake: number;
 }
@@ -54,6 +55,8 @@ export class BattleScene extends Phaser.Scene {
   private offscreenLabels: Phaser.GameObjects.Text[] = [];
   private pauseOverlay!: Phaser.GameObjects.Container;
   private popups: Phaser.GameObjects.Text[] = [];
+  /** HUD portraits and off-screen bubbles, drawn with the same renderer as the match. */
+  private hudFigures!: FigureCache;
 
   constructor() {
     super('Battle');
@@ -92,7 +95,7 @@ export class BattleScene extends Phaser.Scene {
     this.world.add(this.backdrop.objects);
     this.world.add(drawStage(this, this.match.stage));
     this.views = this.match.fighters.map((f) => new FighterView(
-      this, f.id, slotLabel(this.setup, f.id), slotColor(this.setup, f.id), slotCss(this.setup, f.id), isAltCostume(this.setup, f.id),
+      this, f.id, f.fighter, slotLabel(this.setup, f.id), slotColor(this.setup, f.id), slotCss(this.setup, f.id), isAltCostume(this.setup, f.id),
     ));
     for (const v of this.views) this.world.add(v.objects);
     this.projectiles = new ProjectileView(this);
@@ -108,6 +111,7 @@ export class BattleScene extends Phaser.Scene {
     this.events.on('ui-object', (o: Phaser.GameObjects.GameObject) => this.hud.add(o));
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.events.off('ui-object'));
 
+    this.hudFigures = new FigureCache(this, (objs) => this.hud.add(objs));
     this.buildHud();
     main.fadeIn(250, 13, 11, 31);
     this.hudCam.fadeIn(250, 13, 11, 31);
@@ -147,7 +151,6 @@ export class BattleScene extends Phaser.Scene {
       bg.fillCircle(-96, 0, 38);
       bg.lineStyle(3, 0xffffff, 0.9);
       bg.strokeCircle(-96, 0, 38);
-      const portrait = this.add.graphics();
       const tag = displayText(this, -118, -36, slotLabel(this.setup, i), 16, slotCss(this.setup, i), UI.inkCss, 5);
       const role = this.add.text(-50, -48 + 4, slotDescription(this.setup, i), {
         fontFamily: FONT_BODY, fontSize: '10px', fontStyle: '900', color: slotCss(this.setup, i),
@@ -157,9 +160,9 @@ export class BattleScene extends Phaser.Scene {
       }).setOrigin(0, 0.5);
       const damage = displayText(this, 70, 8, '0%', 44, '#ffffff', UI.inkCss, 8);
       const stocks = this.add.graphics();
-      const container = this.add.container(x, y, [bg, portrait, tag, role, name, stocks, damage]);
+      const container = this.add.container(x, y, [bg, tag, role, name, stocks, damage]);
       add(container);
-      this.cards.push({ container, damage, stocks, portrait, shownDamage: 0, shake: 0 });
+      this.cards.push({ container, damage, stocks, shownDamage: 0, shake: 0 });
     });
 
     this.offscreen = add(this.add.graphics());
@@ -230,14 +233,10 @@ export class BattleScene extends Phaser.Scene {
         card.stocks.strokeCircle(-42 + k * 20, -6, 7);
       }
 
-      card.portrait.clear();
-      const pose = computePose({
-        fighter: f.fighter,
-        action: f.action === 'hitstun' ? 'hitstun' : 'preview',
-        move: null, actionFrame: 0, grounded: true, vx: 0, vy: 0, runSpeed: 1,
-        t: this.frameCount, flip: -1, tumble: false, charge: 0, rocketLaunched: false,
+      const frame = previewFrame(f.fighter, f.action === 'hitstun' ? 'hit' : 'idle', f.action === 'hitstun' ? 0 : this.frameCount);
+      this.hudFigures.draw(f.fighter, frame, card.container.x - 96, card.container.y + 30, 1, 0.75, {
+        alt: isAltCostume(this.setup, i), slot: `card${i}`, alpha: f.eliminated ? 0.45 : 1,
       });
-      drawFighter(card.portrait, f.fighter, pose, -96, 30, 1, 0.75, false, isAltCostume(this.setup, i));
     });
   }
 
@@ -261,11 +260,8 @@ export class BattleScene extends Phaser.Scene {
       g.fillCircle(sx, sy, 36);
       g.lineStyle(5, slotColor(this.setup, i), 1);
       g.strokeCircle(sx, sy, 36);
-      const pose = computePose({
-        fighter: f.fighter, action: f.action === 'hitstun' ? 'hitstun' : 'preview', move: null, actionFrame: 0,
-        grounded: true, vx: 0, vy: 0, runSpeed: 1, t: this.frameCount, flip: -1, tumble: false, charge: 0, rocketLaunched: false,
-      });
-      drawFighter(g, f.fighter, pose, sx, sy + 24, f.facing, 0.5, false, isAltCostume(this.setup, i));
+      const frame = previewFrame(f.fighter, f.action === 'hitstun' ? 'hit' : 'idle', f.action === 'hitstun' ? 0 : this.frameCount);
+      this.hudFigures.draw(f.fighter, frame, sx, sy + 24, f.facing, 0.5, { alt: isAltCostume(this.setup, i), slot: `bubble${i}` });
       label.setPosition(sx, sy - 44).setVisible(true).setColor(slotCss(this.setup, i));
     });
   }
@@ -321,8 +317,10 @@ export class BattleScene extends Phaser.Scene {
     this.projectiles.draw(this.match.projectiles, this.frameCount);
     this.effects.draw();
     this.updateCamera();
+    this.hudFigures.begin();
     this.updateHud();
     this.updateOffscreen();
+    this.hudFigures.end();
   }
 
   private tick(): void {
@@ -330,7 +328,7 @@ export class BattleScene extends Phaser.Scene {
     const inputs = this.sources.map((s) => s.poll());
     const events = stepMatch(this.match, inputs);
     for (const e of events) this.handleEvent(e);
-    for (const v of this.views) v.tick();
+    this.views.forEach((v, i) => v.tick(this.match.fighters[i]));
     this.effects.tick();
     this.backdrop.update();
 

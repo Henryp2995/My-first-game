@@ -1,0 +1,40 @@
+{
+  "goku": {
+    "key": "sprite-goku",
+    "atlasPng": "assets/fighters/goku/goku.png",
+    "atlasJson": "assets/fighters/goku/goku.json",
+    "scale": 1.235,
+    "anchorX": 0.5,
+    "anchorY": 0.8509,
+    "fps": {},
+    "head": {
+      "x": 4,
+      "y": -71
+    },
+    "hand": {
+      "x": 24,
+      "y": -41
+    },
+    "filter": "nearest",
+    "frameCount": 43
+  },
+  "gundam": {
+    "key": "sprite-gundam",
+    "atlasPng": "assets/fighters/gundam/gundam.png",
+    "atlasJson": "assets/fighters/gundam/gundam.json",
+    "scale": 1.474,
+    "anchorX": 0.5,
+    "anchorY": 0.9417,
+    "fps": {},
+    "head": {
+      "x": 4,
+      "y": -67
+    },
+    "hand": {
+      "x": 23,
+      "y": -38
+    },
+    "filter": "nearest",
+    "frameCount": 33
+  }
+}

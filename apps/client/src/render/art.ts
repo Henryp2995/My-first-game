@@ -1,6 +1,7 @@
 import type Phaser from 'phaser';
 import type { FighterId } from '@arena-rush/shared';
-import type { Limb, Pose } from './pose';
+import type { Secondary } from '../anim/controller';
+import type { Limb, Pose } from '../anim/pose';
 
 interface Rig {
   hipH: number;
@@ -27,6 +28,43 @@ const RIGS: Record<FighterId, Rig> = {
   gundam: { hipH: 42, thigh: 20, shin: 21, torso: 28, neck: 2, headR: 12, upperArm: 17, foreArm: 16, limbW: 11, legW: 13, torsoW: 30 },
   vader: { hipH: 42, thigh: 21, shin: 21, torso: 29, neck: 2, headR: 13, upperArm: 17, foreArm: 16, limbW: 10, legW: 11, torsoW: 27 },
 };
+
+/**
+ * Body plan: silhouette proportions on top of the skeleton. Torso widths are multiples of the rig's
+ * torsoW; limb tapers are [root, end] width multipliers for upper and lower segments.
+ */
+interface BodyPlan {
+  chest: number;
+  waist: number;
+  hips: number;
+  upper: [number, number];
+  lower: [number, number];
+  /** Armored segments with joint balls instead of smooth capsules. */
+  boxy?: boolean;
+  /** No outline or shading (LCD silhouette). */
+  flat?: boolean;
+}
+
+const BODY: Record<FighterId, BodyPlan> = {
+  gnw: { chest: 1.05, waist: 0.8, hips: 0.95, upper: [1.15, 0.9], lower: [0.95, 0.75], flat: true },
+  luigi: { chest: 1.0, waist: 1.08, hips: 1.02, upper: [1.15, 0.95], lower: [1.0, 0.8] },
+  sheik: { chest: 1.12, waist: 0.72, hips: 0.85, upper: [1.15, 0.85], lower: [0.95, 0.7] },
+  spiderman: { chest: 1.18, waist: 0.72, hips: 0.85, upper: [1.2, 0.9], lower: [1.0, 0.72] },
+  batman: { chest: 1.32, waist: 0.84, hips: 0.95, upper: [1.3, 0.95], lower: [1.15, 0.82] },
+  naruto: { chest: 1.02, waist: 0.84, hips: 0.92, upper: [1.12, 0.9], lower: [0.98, 0.78] },
+  goku: { chest: 1.28, waist: 0.82, hips: 0.95, upper: [1.32, 0.95], lower: [1.15, 0.8] },
+  gundam: { chest: 1.3, waist: 0.78, hips: 1.08, upper: [1.0, 0.95], lower: [1.25, 1.12], boxy: true },
+  vader: { chest: 1.22, waist: 0.98, hips: 1.06, upper: [1.15, 1.0], lower: [1.08, 0.9] },
+};
+
+/** Optional per-frame extras from the animation controller. */
+export interface DrawExtras {
+  squashX?: number;
+  squashY?: number;
+  secondary?: Secondary;
+  /** 0..1 thruster burn (Gundam). */
+  thrust?: number;
+}
 
 /** Colors for the four crossover fighters, drawn by the shared "hero" path below. */
 export interface HeroColors {
@@ -176,6 +214,8 @@ export interface DrawResult {
   propAnchor: V | null;
   /** Front hand position in world space (for held effects like energy orbs). */
   handF: V;
+  /** Tip of a held blade, if any (for swing trails). */
+  weaponTip: V | null;
 }
 
 /**
@@ -192,8 +232,13 @@ export function drawFighter(
   scale = 1,
   flash = false,
   alt = false,
+  extras: DrawExtras = {},
 ): DrawResult {
   const rig = RIGS[id];
+  const body = BODY[id];
+  const sqX = extras.squashX ?? 1;
+  const sqY = extras.squashY ?? 1;
+  const sec = extras.secondary ?? { capeX: 0, capeY: 0, hairX: 0, hairY: 0 };
   const hero = isHero(id) ? (alt ? HERO_ALT_COLORS[id] : HERO_COLORS[id]) : null;
   const basePal = hero ? heroPalette(hero) : alt ? ALT_PALETTES[id as ClassicId] : PALETTES[id as ClassicId];
   const pal = flash ? whitePalette(basePal) : basePal;
@@ -209,8 +254,8 @@ export function drawFighter(
     let py = ly - pivot.y;
     const rx = px * cosS - py * sinS;
     const ry = px * sinS + py * cosS;
-    px = rx + pivot.x + pose.dx;
-    py = ry + pivot.y;
+    px = (rx + pivot.x + pose.dx) * sqX;
+    py = (ry + pivot.y) * sqY;
     return { x: x + px * facing * s, y: y + py * s };
   };
   const dir = (a: number) => ({ x: Math.sin(a), y: Math.cos(a) });
@@ -281,13 +326,131 @@ export function drawFighter(
   };
 
   const ol = pal.outline;
-  const OW = id === 'gnw' ? 0 : 2.5;
+  const OW = body.flat ? 0 : 2.5;
+  const shading = !body.flat && !flash;
+
+  /**
+   * A tapered body part from a to b (wa → wb wide): outline, base color, cel-shaded back half
+   * (the side facing away from the camera's light) and a thin rim highlight on the front edge.
+   */
+  const part = (a: V, b: V, wa: number, wb: number, color: number) => {
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const nx = -dy / len;
+    const ny = dx / len;
+    const quad = (ea: number, eb: number, sideA = 1, sideB = -1) => [
+      T(a.x + nx * ea * sideA, a.y + ny * ea * sideA), T(b.x + nx * eb * sideA, b.y + ny * eb * sideA),
+      T(b.x + nx * eb * sideB, b.y + ny * eb * sideB), T(a.x + nx * ea * sideB, a.y + ny * ea * sideB),
+    ];
+    const A = T(a.x, a.y);
+    const B = T(b.x, b.y);
+    if (OW > 0) {
+      g.fillStyle(ol, 1);
+      g.fillPoints(quad(wa / 2 + OW, wb / 2 + OW), true);
+      if (!body.boxy) {
+        g.fillCircle(A.x, A.y, (wa / 2 + OW) * s);
+        g.fillCircle(B.x, B.y, (wb / 2 + OW) * s);
+      }
+    }
+    g.fillStyle(color, 1);
+    g.fillPoints(quad(wa / 2, wb / 2), true);
+    if (!body.boxy) {
+      g.fillCircle(A.x, A.y, (wa / 2) * s);
+      g.fillCircle(B.x, B.y, (wb / 2) * s);
+    }
+    if (shading) {
+      // Back half is the side whose normal points away from the facing direction (local -x).
+      const back = nx > 0 ? -1 : 1;
+      g.fillStyle(shade(color, 0.8), 1);
+      g.fillPoints([
+        T(a.x + nx * (wa / 2) * back, a.y + ny * (wa / 2) * back), T(b.x + nx * (wb / 2) * back, b.y + ny * (wb / 2) * back),
+        T(b.x + nx * (wb / 8) * back, b.y + ny * (wb / 8) * back), T(a.x + nx * (wa / 8) * back, a.y + ny * (wa / 8) * back),
+      ], true);
+      const f0 = T(a.x - nx * (wa / 2 - 1.2) * back, a.y - ny * (wa / 2 - 1.2) * back);
+      const f1 = T(b.x - nx * (wb / 2 - 1.2) * back, b.y - ny * (wb / 2 - 1.2) * back);
+      g.lineStyle(1.3 * s, shade(color, 1.35), 0.55);
+      g.lineBetween(f0.x, f0.y, f1.x, f1.y);
+    }
+  };
+
+  /** Torso half-width at height t along the spine (0 = hip, 1 = shoulder), from the body plan. */
+  const halfAt = (t: number) => {
+    const tw = rig.torsoW / 2;
+    const lerp = (u: number, v: number, k: number) => u + (v - u) * Math.max(0, Math.min(1, k));
+    if (t <= 0) return tw * body.hips * (1 - Math.min(1, -t * 2) * 0.2);
+    if (t < 0.32) return tw * lerp(body.hips, body.waist, t / 0.32);
+    if (t < 0.62) return tw * lerp(body.waist, body.chest * 0.98, (t - 0.32) / 0.3);
+    if (t <= 1) return tw * lerp(body.chest * 0.98, body.chest, (t - 0.62) / 0.38);
+    return tw * body.chest * (1 - Math.min(1, (t - 1) * 4) * 0.25);
+  };
+
+  /** Shaped torso (chest/waist/hips) between t0 and t1 along the spine, with outline and shading. */
+  const torsoShape = (color: number, t0 = -0.14, t1 = 1.06, widthScale = 1) => {
+    const dx = shoulder.x - hip.x;
+    const dy = shoulder.y - hip.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const nx = -dy / len;
+    const ny = dx / len;
+    const stops = (body.boxy ? [t0, 0.3, 0.62, t1] : [t0, 0, 0.16, 0.32, 0.47, 0.62, 0.8, 0.94, t1])
+      .filter((t) => t >= t0 && t <= t1)
+      .sort((u, v) => u - v);
+    const pt = (t: number, side: number, inset = 1) => {
+      const h = halfAt(t) * widthScale * inset * side;
+      return T(hip.x + dx * t + nx * h, hip.y + dy * t + ny * h);
+    };
+    const front = stops.map((t) => pt(t, 1));
+    const backSide = stops.map((t) => pt(t, -1)).reverse();
+    const outlinePts = [...front, ...backSide];
+    if (OW > 0) {
+      g.lineStyle(OW * 2 * s, ol, 1);
+      g.strokePoints(outlinePts, true, true);
+    }
+    g.fillStyle(color, 1);
+    g.fillPoints(outlinePts, true);
+    if (shading) {
+      g.fillStyle(shade(color, 0.8), 1);
+      g.fillPoints([...stops.map((t) => pt(t, -0.25)), ...stops.map((t) => pt(t, -1)).reverse()], true);
+      g.lineStyle(1.3 * s, shade(color, 1.3), 0.5);
+      g.strokePoints(stops.map((t) => pt(t, 1, 0.82)), false);
+    }
+  };
+
   const outlined = (pts: V[], w: number, color: number) => {
-    if (OW > 0) for (let i = 0; i < pts.length - 1; i++) seg(pts[i], pts[i + 1], w + OW * 2, ol);
-    for (let i = 0; i < pts.length - 1; i++) seg(pts[i], pts[i + 1], w, color);
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = pts[i];
+      const b = pts[i + 1];
+      if (a === hip && b === shoulder) {
+        torsoShape(color);
+        continue;
+      }
+      const root = a === shoulder || a === hip;
+      const [ka, kb] = root ? body.upper : body.lower;
+      part(a, b, w * ka, w * kb, color);
+      if (body.boxy && root) {
+        // Mechanical joint (elbow / knee)
+        const J = T(b.x, b.y);
+        g.fillStyle(ol, 1);
+        g.fillCircle(J.x, J.y, (w * 0.42 + OW) * s);
+        g.fillStyle(flash ? 0xffffff : 0x8a90a0, 1);
+        g.fillCircle(J.x, J.y, w * 0.42 * s);
+      }
+    }
+  };
+
+  /** Neck from the shoulders to the base of the head, so heads don't float. */
+  const neck = (color: number, widthK = 0.7) => {
+    const top = { x: shoulder.x + Math.sin(headA) * (rig.neck + rig.headR * 0.45), y: shoulder.y - Math.cos(headA) * (rig.neck + rig.headR * 0.45) };
+    const base = { x: shoulder.x - Math.sin(pose.lean) * 3, y: shoulder.y + Math.cos(pose.lean) * 3 };
+    part(base, top, rig.headR * widthK, rig.headR * widthK * 0.9, color);
+  };
+  /** Foot / boot from the ankle to the toe. */
+  const foot = (ankle: V, color: number, length: number, w: number) => {
+    part(ankle, { x: ankle.x + length, y: ankle.y + 2.5 }, w, w * 0.72, color);
   };
 
   let propAnchor: V | null = null;
+  let weaponTip: V | null = null;
   const drawProp = () => {
     if (!pose.prop) return;
     const hand = armF[2];
@@ -360,7 +523,7 @@ export function drawFighter(
   if (id === 'luigi') {
     outlined([hip, shoulder], rig.torsoW, pal.body);
     const bibTop = lerpV(hip, shoulder, 0.62);
-    seg(hip, bibTop, rig.torsoW, pal.accent);
+    torsoShape(pal.accent, -0.14, 0.62);
     seg({ x: hip.x - 5, y: hip.y + 3 }, { x: hip.x + 6, y: hip.y + 3 }, 10, pal.accent);
     dot({ x: bibTop.x + 6, y: bibTop.y + 1 }, 2.6, pal.accent2);
     dot({ x: bibTop.x - 6, y: bibTop.y + 1 }, 2.6, pal.accent2);
@@ -378,8 +541,7 @@ export function drawFighter(
     g.lineStyle(1.5 * s, pal.detail, 1);
     g.lineBetween(E.x, E.y + 2.5 * s, E.x, E.y + 7 * s);
   } else {
-    seg(hip, shoulder, rig.torsoW, pal.body);
-    seg(lerpV(hip, shoulder, -0.1), lerpV(hip, shoulder, 0.5), rig.torsoW + 2, pal.body);
+    torsoShape(pal.body);
   }
 
   // --- Front leg ---------------------------------------------------------------
@@ -396,7 +558,10 @@ export function drawFighter(
     drawShoe(legF[2], pal.body);
   }
 
-  // --- Head --------------------------------------------------------------------
+  // --- Neck & head ------------------------------------------------------------
+  if (id === 'luigi') neck(pal.skin, 0.62);
+  else if (id === 'sheik') neck(pal.body, 0.6);
+  else neck(pal.body, 0.5);
   const r = rig.headR;
   if (id === 'gnw') {
     poly(ellipse(0, 0, r, r), pal.body);
@@ -447,7 +612,7 @@ export function drawFighter(
     // Sheik: braid, cowl, eye slit, hair tuft
     const braidTop = { hx: -r * 0.8, hy: 0 };
     const b0 = HP(braidTop.hx, braidTop.hy);
-    const b1 = HP(-r * 1.6, r * 1.7);
+    const b1 = HP(-r * 1.6 + sec.hairX, r * 1.7 + sec.hairY);
     g.lineStyle(5 * s, pal.hair, 1);
     g.lineBetween(b0.x, b0.y, b1.x, b1.y);
     g.fillStyle(pal.accent2, 1);
@@ -481,7 +646,7 @@ export function drawFighter(
 
   const headW = T(head.x, head.y);
   const top = Math.min(headW.y - r * s * 1.6, T(shoulder.x, shoulder.y).y - r * 2 * s);
-  return { head: headW, top, propAnchor, handF: T(armF[2].x, armF[2].y) };
+  return { head: headW, top, propAnchor, handF: T(armF[2].x, armF[2].y), weaponTip };
 
   /** The four crossover fighters share one body plan with per-character details. */
   function drawHero(colors: HeroColors): DrawResult {
@@ -493,13 +658,17 @@ export function drawFighter(
 
     // Cape (behind everything).
     if (colors.cape) {
+      // Cape shape follows the pose's flare plus spring-driven secondary motion (trails behind movement).
       const flare = pose.flare;
+      const cx = sec.capeX;
+      const cy = sec.capeY;
       const back = { x: shoulder.x - 6, y: shoulder.y + 2 };
+      const wave = Math.sin((cx + cy) * 0.15) * 3;
       const pts = [
         T(shoulder.x + 4, shoulder.y - 2),
-        T(back.x - 10 - flare * 18, hip.y + 6 - flare * 6),
-        T(back.x - 22 - flare * 30, hip.y + rig.thigh + 6 - flare * 14),
-        T(hip.x - 8 - flare * 10, hip.y + rig.thigh + 10 - flare * 8),
+        T(back.x - 10 - flare * 18 + cx * 0.45, hip.y + 6 - flare * 6 + cy * 0.4),
+        T(back.x - 22 - flare * 30 + cx, hip.y + rig.thigh + 6 - flare * 14 + cy + wave),
+        T(hip.x - 6 - flare * 10 + cx * 0.6, hip.y + rig.thigh + 12 - flare * 8 + cy * 0.7 - wave),
         T(hip.x + 2, hip.y),
       ];
       g.fillStyle(ol, 1);
@@ -516,8 +685,9 @@ export function drawFighter(
     const legBack = () => {
       outlined([legB[0], legB[1]], rig.legW, dim(colors.thigh));
       outlined([legB[1], legB[2]], rig.legW, dim(colors.shin));
-      seg(legB[2], { x: legB[2].x + 6, y: legB[2].y + 1 }, rig.legW * 0.8, dim(colors.boot));
+      foot(legB[2], dim(colors.boot), heroId === 'gundam' ? 15 : 10, rig.legW * 0.95);
     };
+    if (heroId === 'gundam' && (extras.thrust ?? 0) > 0) drawThrusters(extras.thrust ?? 0);
     armBack();
     legBack();
     if (heroId === 'gundam') drawShield(armB[2], colors, c);
@@ -527,11 +697,11 @@ export function drawFighter(
     const at = (t: number, dx = 0) => ({ x: hip.x + (shoulder.x - hip.x) * t + dx, y: hip.y + (shoulder.y - hip.y) * t });
     /** A band across the torso at height t (0 = hip, 1 = shoulder). */
     function belt(t: number, thickness: number, color: number) {
-      const half = rig.torsoW / 2 - thickness / 2 + 0.5;
+      const half = halfAt(t) - thickness / 2 + 0.5;
       seg(at(t, -half), at(t, half), thickness, color);
     }
     if (heroId === 'spiderman') {
-      seg(hip, at(0.38), rig.torsoW, c(colors.suit2));
+      torsoShape(c(colors.suit2), -0.14, 0.38);
       // spider emblem + web lines
       const e = at(0.68, 3);
       dot(e, 2.4, c(colors.accent2));
@@ -545,13 +715,13 @@ export function drawFighter(
       belt(0.08, 5.5, c(colors.accent2));
       for (const dx of [-7, 0, 7]) dot(at(0.08, dx), 2.2, c(shade(colors.accent2, 0.75)));
     } else if (heroId === 'naruto') {
-      seg(at(0.72), shoulder, rig.torsoW, c(colors.suit2));
+      torsoShape(c(colors.suit2), 0.72, 1.06);
       dot(at(1, 2), rig.torsoW * 0.32, c(W));
       seg(at(0.08, rig.torsoW * 0.3), at(0.7, rig.torsoW * 0.3), 1.2, c(W));
       dot(at(0.0), rig.torsoW * 0.38, c(colors.suit2));
     } else if (heroId === 'gundam') {
       // Blue chest with yellow vents, red waist block
-      seg(at(0.0), at(0.22), rig.torsoW - 4, c(colors.suit2));
+      torsoShape(c(colors.suit2), -0.14, 0.22, 0.95);
       belt(0.24, 4, c(0xf2f3f7));
       for (const dx of [-6, 6]) {
         const v = at(0.72, dx + 3);
@@ -590,9 +760,13 @@ export function drawFighter(
     outlined([legF[0], legF[1]], rig.legW, c(colors.thigh));
     outlined([legF[1], legF[2]], rig.legW, c(colors.shin));
     if (heroId === 'goku') seg(lerpV(legF[1], legF[2], 0.55), legF[2], rig.legW + 1, c(colors.boot));
-    seg(legF[2], { x: legF[2].x + 7, y: legF[2].y + 1 }, rig.legW * 0.85, c(colors.boot));
+    foot(legF[2], c(colors.boot), heroId === 'gundam' ? 15 : 10, rig.legW * 0.95);
 
-    // Head
+    // Neck & head
+    const neckColor: Record<HeroId, number> = {
+      spiderman: colors.skin, batman: colors.hair, naruto: colors.skin, goku: colors.skin, gundam: 0x8a90a0, vader: colors.skin,
+    };
+    neck(c(neckColor[heroId]), heroId === 'gundam' || heroId === 'vader' ? 0.8 : 0.62);
     drawHeroHead(heroId, colors, c, r);
 
     // Front arm
@@ -628,7 +802,7 @@ export function drawFighter(
 
     const headW = T(head.x, head.y);
     const top = Math.min(headW.y - r * s * 1.8, T(shoulder.x, shoulder.y).y - r * 2 * s);
-    return { head: headW, top, propAnchor: null, handF: T(armF[2].x, armF[2].y) };
+    return { head: headW, top, propAnchor: null, handF: T(armF[2].x, armF[2].y), weaponTip };
   }
 
   function drawHeroHead(heroId: HeroId, colors: HeroColors, c: (n: number) => number, r: number) {
@@ -664,7 +838,7 @@ export function drawFighter(
         [-2, -r * 1.12], [1, -r * 1.75], [5, -r * 1.1], [9, -r * 1.55], [r * 0.8, -r * 0.7], [r * 1.35, -r * 0.8], [r * 0.95, -3]], c(colors.hair), ol, 1.8);
       poly(ellipse(0.5, 1, r * 0.98, r), c(colors.skin), ol);
       const tail0 = HP(-r * 0.9, -4);
-      const tail1 = HP(-r * 1.7, 4);
+      const tail1 = HP(-r * 1.7 + sec.hairX, 4 + sec.hairY);
       g.lineStyle(3 * s, c(colors.accent2), 1);
       g.lineBetween(tail0.x, tail0.y, tail1.x, tail1.y);
       poly([[-r * 0.98, -7], [r + 0.8, -8], [r + 0.8, -2.5], [-r * 0.98, -1.5]], c(colors.accent2));
@@ -729,6 +903,29 @@ export function drawFighter(
     }
   }
 
+  /** Backpack and sole thruster flames (Gundam), sized by burn strength. */
+  function drawThrusters(burn: number) {
+    const flame = (base: V, dirX: number, dirY: number, length: number, width: number) => {
+      const flick = 0.85 + Math.random() * 0.3;
+      const tip = { x: base.x + dirX * length * flick, y: base.y + dirY * length * flick };
+      const nx = -dirY * width;
+      const ny = dirX * width;
+      const layer = (k: number, color: number, alpha: number) => {
+        const t2 = { x: base.x + (tip.x - base.x) * k, y: base.y + (tip.y - base.y) * k };
+        g.fillStyle(color, alpha);
+        g.fillPoints([T(base.x + nx * k, base.y + ny * k), T(t2.x, t2.y), T(base.x - nx * k, base.y - ny * k)], true);
+      };
+      layer(1, 0xff8a1f, 0.55);
+      layer(0.7, 0xffd23f, 0.85);
+      layer(0.4, 0xffffff, 1);
+    };
+    const pack = { x: shoulder.x - rig.torsoW * 0.55, y: shoulder.y + 8 };
+    flame(pack, -0.35, 1, 38 * burn, 6);
+    flame({ x: pack.x + 2, y: pack.y + 10 }, -0.25, 1, 30 * burn, 5);
+    flame({ x: legF[2].x, y: legF[2].y + 3 }, 0, 1, 24 * burn, 5);
+    flame({ x: legB[2].x, y: legB[2].y + 3 }, 0, 1, 20 * burn, 4);
+  }
+
   function drawShield(hand: V, colors: HeroColors, c: (n: number) => number) {
     // Tall red shield with a white rim and a yellow cross, carried on the back arm.
     const cx = hand.x - 4;
@@ -768,6 +965,7 @@ export function drawFighter(
     seg({ x: hand.x - ux * 4, y: hand.y - uy * 4 }, hiltEnd, 4.5, flash ? 0xffffff : 0x9aa0ad);
     const A = T(hiltEnd.x, hiltEnd.y);
     const B = T(tip.x, tip.y);
+    weaponTip = B;
     g.lineStyle(11 * s, blade, 0.25);
     g.lineBetween(A.x, A.y, B.x, B.y);
     g.lineStyle(6.5 * s, blade, 0.85);
@@ -801,9 +999,9 @@ export function drawFighter(
       g.fillStyle(color, 1);
       g.fillEllipse(a.x, a.y, 14.5 * s, 8 * s);
     } else if (id === 'sheik') {
-      seg(ankle, { x: ankle.x + 6, y: ankle.y + 1 }, 5, color);
+      foot(ankle, color, 9, 6.5);
     } else {
-      seg(ankle, { x: ankle.x + 5, y: ankle.y }, 5, color);
+      foot(ankle, color, 7, 6);
     }
   }
 

@@ -188,6 +188,27 @@ arena-rush/
 - **Every fighter is driven by an `InputSource`.** `MatchSetup.players` is a list of slots: `{ fighter, control: 'human' }` or `{ fighter, control: 'cpu', difficulty }`. The battle scene creates a `KeyboardInputSource` (P1 keys) or a `CpuInputSource` for each slot. The simulation itself has no idea who is human.
 - **The client is ready for networking.** Clients only produce inputs, and `encodeInput` packs an input frame into 9 bits. In Phase 3 a `'remote'` slot type and a network `InputSource` get added, and the server runs the same `stepMatch` (and `CpuController`, for bots) inside a Colyseus room.
 
+### Animation and character art
+
+All of this is client-only and visual. The simulation never reads it, and a test checks that match results are identical with or without animation running.
+
+- **`apps/client/src/anim/`** is a Phaser-free animation layer, unit-tested under Vitest:
+  - `states.ts` defines 17 animation states: idle, walk, run, jumpStart, rise, fall, land, light, heavy, special, aerial, dodge, hit, knockback, ko, respawn and victory. Each state has a **priority** and a **transition time**. Event-driven states (jump startup, landing, KO) only show when nothing more important is playing.
+  - `profiles.ts` holds each fighter's movement personality as data: stance, breathing, walk and run gait (cadence, stride, knee lift, arm style), jump style (flip, tuck or thruster), squash strength, heft, LCD stepping (G&W) and rigid servo joints (Gundam).
+  - `clips.ts` holds data-driven attack clips (windup, strike, follow-through and multi-hit beats). **Timing comes from each move's real frame data:** anticipation fills startup, the strike pose lands on the first active frame, multi-hit beats land on each hitbox group's first frame, and follow-through plays in recovery. Heavier fighters reach their windup sooner and hold it longer.
+  - `controller.ts` turns `FighterState` plus `GameEvent`s into an `AnimFrame` each tick. It handles cross-fades, spring squash and stretch, and spring-driven capes and hair. `sampleStateFrame()` renders any state with no match running (menus, gallery, sprite baking).
+- **`apps/client/src/render/characters/`** is the renderer abstraction. `createCharacterRenderer()` picks:
+  1. **Sprite atlas** frames, if real artwork is registered in `manifest.ts` and loaded. Frames are named `<state>_<n>`. Looping states use fps; attacks map onto the move's real progress.
+  2. **Baked sprites** with `?sprites=baked`. The procedural animation is rendered into an in-memory atlas to exercise the sprite pipeline end to end.
+  3. **Procedural vector art** (`render/art.ts`), the default today.
+- **Procedural art:**
+  - Each fighter has a per-fighter body plan (chest, waist and hip widths; limb tapers; boxy armor for Gundam; a flat LCD silhouette for G&W).
+  - Limbs are tapered and cel-shaded with rim highlights, torsos are shaped, and every fighter has a neck and shaped feet.
+  - Squash and stretch, plus cape and hair secondary motion.
+  - Swing trails on active frames, Gundam's thruster flames, and the existing per-move effects.
+- **Dev gallery:** `?gallery` shows every fighter in key states; `?gallery=<fighterId>` shows one fighter in all 17 states.
+- **Artwork still needed:** see `apps/client/public/assets/fighters/README.md` for the atlas format, frame list and sizes.
+
 ### Combat physics
 
 All gameplay values shared by every fighter live in `packages/shared/src/config.ts` (`DEFAULT_RULES`). Per-character values (speeds, gravity, jumps, traction, weight, moves) live in `fighters.ts`.
@@ -216,7 +237,7 @@ The lightweight G&W dies about 20–30% earlier. Light attacks never KO on their
 
 ## Testing
 
-`npm test` runs 145 Vitest tests against the shared simulation. They cover:
+`npm test` runs 212 Vitest tests (shared simulation + client animation layer). They cover:
 
 - movement, acceleration, traction differences, gravity and landing
 - one-way platforms (jumping through and dropping through)
@@ -248,4 +269,4 @@ The lightweight G&W dies about 20–30% earlier. Light attacks never KO on their
 - There is no ledge-grab state. Recovering close to the lip snaps you onto the stage instead.
 - There is no shielding or grabbing; dodging is the only defensive option.
 - There is no gamepad support yet.
-- The art is procedural placeholder art, designed to be replaced.
+- **Character art is procedural placeholder art, not finished illustrated sprites.** The animation system and sprite pipeline are in place. Illustrated atlases for all nine fighters are still needed (see `apps/client/public/assets/fighters/README.md`).
